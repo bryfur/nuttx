@@ -364,13 +364,13 @@ void up_disable_irq(int irq)
 
   /* Check for an external interrupt */
 
-  if (irq - RP23XX_IRQ_EXTINT >= RP23XX_IRQ_EXTINT && irq < RP23XX_IRQ_NIRQS)
+  if (irq >= RP23XX_IRQ_EXTINT && irq < RP23XX_IRQ_NIRQS)
     {
       /* Set the appropriate bit in the ICER register to disable the
        * interrupt
        */
 
-      if (irq < 32)
+      if (irq - RP23XX_IRQ_EXTINT < 32)
         {
           putreg32((1 << (irq - RP23XX_IRQ_EXTINT)), NVIC_IRQ0_31_CLEAR);
         }
