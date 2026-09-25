@@ -103,6 +103,8 @@ static struct dma_channel_s g_dmach[RP23XX_DMA_NCHANNELS];
 static int rp23xx_dmac_interrupt(int irq, void *context, void *arg)
 {
   struct dma_channel_s *dmach;
+  dma_callback_t callback;
+  void *cbarg;
   int result = OK;
   unsigned int ch;
   uint32_t stat;
@@ -130,15 +132,20 @@ static int rp23xx_dmac_interrupt(int irq, void *context, void *arg)
 
       dmach = &g_dmach[ch];
 
-      /* Call the DMA completion callback */
+      /* Call the DMA completion callback.  Clear it first: the callback
+       * (or a thread it wakes on the other core) may start the channel
+       * again with a new callback, which must not then be wiped here.
+       */
 
-      if (dmach->callback)
+      callback = dmach->callback;
+      cbarg    = dmach->arg;
+      dmach->callback = NULL;
+      dmach->arg      = NULL;
+
+      if (callback)
         {
-          dmach->callback((DMA_HANDLE)dmach, result, dmach->arg);
-          dmach->callback = NULL;
+          callback((DMA_HANDLE)dmach, result, cbarg);
         }
-
-      dmach->arg = NULL;
     }
 
   return OK;
@@ -579,6 +586,7 @@ void rp23xx_dmastart(DMA_HANDLE handle, dma_callback_t callback, void *arg)
 void rp23xx_dmastop(DMA_HANDLE handle)
 {
   struct dma_channel_s *dmach = (struct dma_channel_s *)handle;
+  irqstate_t flags;
   uint32_t bit;
   uint32_t stat;
 
@@ -594,6 +602,16 @@ void rp23xx_dmastop(DMA_HANDLE handle)
       stat = getreg32(RP23XX_DMA_CHAN_ABORT);
     }
   while (stat & bit);
+
+  /* The channel is reset: forget its callback and any completion it
+   * raised on the way, so that neither is mistaken for the next transfer's.
+   */
+
+  flags = enter_critical_section();
+  putreg32(bit, RP23XX_DMA_INTS0);
+  dmach->callback = NULL;
+  dmach->arg      = NULL;
+  leave_critical_section(flags);
 }
 
 /****************************************************************************
