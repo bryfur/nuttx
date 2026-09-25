@@ -49,6 +49,15 @@ static struct nxgl_point_s       g_mrange;
 static uint8_t                   g_mbutton;
 static FAR struct nxbe_window_s *g_mwnd;
 
+/* Where g_mwnd was when the button went down.  While a button is held,
+ * positions are reported relative to this, not to where the window is now,
+ * so that a client that moves the window as it is dragged (a window
+ * manager) sees the pointer move by as much as it really did, whatever
+ * mouse reports were converted before and after each move took effect.
+ */
+
+static struct nxgl_point_s       g_morigin;
+
 /****************************************************************************
  * Private Functions
  ****************************************************************************/
@@ -210,10 +219,11 @@ int nxmu_mousein(FAR struct nxmu_state_s *nxmu,
           if (g_mwnd != NULL && g_mwnd->cb->mousein)
             {
               struct nxclimsg_mousein_s outmsg;
+
               outmsg.msgid   = NX_CLIMSG_MOUSEIN;
               outmsg.wnd     = g_mwnd;
               outmsg.buttons = g_mbutton;
-              nxgl_vectsubtract(&outmsg.pos, &g_mpos, &g_mwnd->bounds.pt1);
+              nxgl_vectsubtract(&outmsg.pos, &g_mpos, &g_morigin);
 
               return nxmu_sendclientwindow(
                                 g_mwnd,
@@ -251,6 +261,10 @@ int nxmu_mousein(FAR struct nxmu_state_s *nxmu,
         }
 
       g_mwnd = wnd;
+      if (wnd != NULL)
+        {
+          g_morigin = wnd->bounds.pt1;
+        }
     }
 
   return OK;
