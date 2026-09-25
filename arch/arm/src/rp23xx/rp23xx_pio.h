@@ -688,7 +688,7 @@ static inline uint32_t rp23xx_pio_get_dreq(uint32_t pio, uint32_t sm,
   check_sm_param(sm);
   return sm + (is_tx ? 0 : RP23XX_PIO_SM_NUM) +
               (pio == 0 ? RP23XX_DMA_DREQ_PIO0_TX0 :
-               pio == 0 ? RP23XX_DMA_DREQ_PIO1_TX0 :
+               pio == 1 ? RP23XX_DMA_DREQ_PIO1_TX0 :
                           RP23XX_DMA_DREQ_PIO2_TX0);
 }
 
