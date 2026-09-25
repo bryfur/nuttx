@@ -452,6 +452,18 @@ config NXTERM_KBDBUFSIZE
 		If NXTERM_NXKBDIN is enabled, then this value may be used to
 		define the size of the per-window keyboard input buffer.  Default: 16
 
+config NXTERM_ECHO
+	bool "Echo keyboard input"
+	default y
+	depends on NXTERM_NXKBDIN
+	---help---
+		Echo the characters a reader takes from the NxTerm, as the serial
+		driver does for a console with ECHO set: printable characters and
+		newlines are drawn, escape sequences and other control characters
+		are not.  readline() leaves echo to the terminal driver (it only
+		redraws what its line editing changes), so without this, what is
+		typed into an NxTerm running NSH does not appear.
+
 config NXTERM_NPOLLWAITERS
 	int "Number of Poll Waiters"
 	default 4

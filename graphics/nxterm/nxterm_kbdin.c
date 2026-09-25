@@ -27,6 +27,7 @@
 #include <nuttx/config.h>
 
 #include <inttypes.h>
+#include <ctype.h>
 #include <fcntl.h>
 #include <sched.h>
 #include <assert.h>
@@ -34,6 +35,7 @@
 #include <errno.h>
 #include <nuttx/debug.h>
 
+#include <nuttx/ascii.h>
 #include <nuttx/spinlock.h>
 
 #include "nxterm.h"
@@ -59,6 +61,76 @@ static void nxterm_pollnotify(FAR struct nxterm_state_s *priv,
   poll_notify(priv->fds, CONFIG_NXTERM_NPOLLWAITERS, eventset);
   spin_unlock_irqrestore_nopreempt(&priv->spinlock, flags);
 }
+
+/****************************************************************************
+ * Name: nxterm_echo
+ *
+ * Description:
+ *   Echo one character that a reader has taken, the way the serial driver
+ *   echoes for a console with ECHO set (readline leaves echo to the
+ *   terminal driver): printable characters and newlines are drawn; escape
+ *   sequences (ESC [ ... final, ESC O x) and other control characters are
+ *   not, the reader redraws whatever they change.  Called with priv->lock
+ *   held.
+ *
+ ****************************************************************************/
+
+#ifdef CONFIG_NXTERM_ECHO
+static void nxterm_echo(FAR struct nxterm_state_s *priv, char ch)
+{
+  enum
+  {
+    ECHO_NORMAL = 0,
+    ECHO_ESC,
+    ECHO_CSI,
+    ECHO_SS3
+  };
+
+  switch (priv->echostate)
+    {
+      case ECHO_ESC:
+        if (ch == '[')
+          {
+            priv->echostate = ECHO_CSI;
+            return;
+          }
+        else if (ch == 'O')
+          {
+            priv->echostate = ECHO_SS3;
+            return;
+          }
+
+        priv->echostate = ECHO_NORMAL;      /* ESC x: x is echoed */
+        break;
+
+      case ECHO_CSI:
+        if (ch >= 0x40 && ch <= 0x7e)
+          {
+            priv->echostate = ECHO_NORMAL;  /* The final byte */
+          }
+
+        return;
+
+      case ECHO_SS3:
+        priv->echostate = ECHO_NORMAL;
+        return;
+
+      default:
+        break;
+    }
+
+  if (ch == ASCII_ESC)
+    {
+      priv->echostate = ECHO_ESC;
+    }
+  else if (!iscntrl(ch & 0xff) || ch == '\n')
+    {
+      nxterm_hidecursor(priv);
+      nxterm_putc(priv, (uint8_t)ch);
+      nxterm_showcursor(priv);
+    }
+}
+#endif
 
 /****************************************************************************
  * Public Functions
@@ -195,6 +267,10 @@ ssize_t nxterm_read(FAR struct file *filep, FAR char *buffer, size_t len)
 
           buffer[nread] = ch;
           nread++;
+
+#ifdef CONFIG_NXTERM_ECHO
+          nxterm_echo(priv, ch);
+#endif
         }
     }
 

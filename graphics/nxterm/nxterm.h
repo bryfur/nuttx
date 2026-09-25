@@ -155,6 +155,10 @@ struct nxterm_state_s
 
   uint8_t rxbuffer[CONFIG_NXTERM_KBDBUFSIZE];
 
+#ifdef CONFIG_NXTERM_ECHO
+  uint8_t echostate;                         /* Escape sequence being echoed */
+#endif
+
   /* The following is a list if poll structures of threads waiting for
    * driver events. The 'struct pollfd' reference for each open is also
    * retained in the f_priv field of the 'struct file'.
