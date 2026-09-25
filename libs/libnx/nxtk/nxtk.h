@@ -61,8 +61,8 @@ struct nxtk_framedwindow_s
 
   /* Initial mouse down location */
 
-  uint8_t mbutton;
-  struct nxgl_point_s mpos;
+  uint8_t mbutton;                /* Buttons at the last mouse report */
+  struct nxgl_point_s mpos;       /* Frame relative; frozen while pressed */
 };
 
 /****************************************************************************

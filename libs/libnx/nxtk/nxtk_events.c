@@ -198,8 +198,9 @@ static void nxtk_mousein(NXWINDOW hwnd, FAR const struct nxgl_point_s *pos,
 {
   FAR struct nxtk_framedwindow_s *fwnd =
                                (FAR struct nxtk_framedwindow_s *)hwnd;
-  struct nxgl_point_s abspos;
   struct nxgl_point_s relpos;
+  struct nxgl_rect_s fwrect;
+  struct nxgl_rect_s tbrect;
 
   /* Raise the window to the top if any mouse button was pressed or if
    * auto-raise is configured.  Do this before reporting the mouse event
@@ -226,22 +227,27 @@ static void nxtk_mousein(NXWINDOW hwnd, FAR const struct nxgl_point_s *pos,
    * offset by the window origin.  Here we need to detect mouse events in
    * the various regions of the windows:  The toolbar, the client window,
    * or the frame.  And then offset the position accordingly.
+   *
+   * The fwrect and tbrect boxes are both in absolute display coordinates.
+   * The comparisons are made relative to the frame instead: the frame may
+   * move while a button is held down (a window being dragged by its
+   * toolbar), and where the regions are relative to the frame does not
+   * change when it does.
    */
 
-  /* The fwrect and tbrect boxes are both in absolute display coordinates. So
-   * the easiest thing to do is to restore the mouse position to absolute
-   * display coordinates before making the comparisons and adjustments.
+  nxgl_rectoffset(&fwrect, &fwnd->fwrect,
+                  -fwnd->wnd.bounds.pt1.x, -fwnd->wnd.bounds.pt1.y);
+  nxgl_rectoffset(&tbrect, &fwnd->tbrect,
+                  -fwnd->wnd.bounds.pt1.x, -fwnd->wnd.bounds.pt1.y);
+
+  /* Route by where the pointer is while no button is down.  From the
+   * moment one goes down, everything up to and including its release goes
+   * where it went down.
    */
 
-  nxgl_vectoradd(&abspos, pos, &fwnd->wnd.bounds.pt1);
-
-  /* In order to deliver mouse release events to the same window where the
-   * mouse down event happened, we store the initial mouse down location.
-   */
-
-  if (fwnd->mbutton == 0 && buttons != 0)
+  if (fwnd->mbutton == 0)
     {
-      fwnd->mpos = abspos;
+      fwnd->mpos = *pos;
     }
 
   fwnd->mbutton = buttons;
@@ -249,18 +255,18 @@ static void nxtk_mousein(NXWINDOW hwnd, FAR const struct nxgl_point_s *pos,
   /* Is the mouse position inside of the client window region? */
 
   if (fwnd->fwcb->mousein != NULL &&
-      nxgl_rectinside(&fwnd->fwrect, &fwnd->mpos))
+      nxgl_rectinside(&fwrect, &fwnd->mpos))
     {
-      nxgl_vectsubtract(&relpos, &abspos, &fwnd->fwrect.pt1);
+      nxgl_vectsubtract(&relpos, pos, &fwrect.pt1);
       fwnd->fwcb->mousein((NXTKWINDOW)fwnd, &relpos, buttons, fwnd->fwarg);
     }
 
   /* If the mouse position inside the toolbar region? */
 
   else if (fwnd->tbcb->mousein != NULL &&
-           nxgl_rectinside(&fwnd->tbrect, &fwnd->mpos))
+           nxgl_rectinside(&tbrect, &fwnd->mpos))
     {
-      nxgl_vectsubtract(&relpos, &abspos, &fwnd->tbrect.pt1);
+      nxgl_vectsubtract(&relpos, pos, &tbrect.pt1);
       fwnd->tbcb->mousein((NXTKWINDOW)fwnd, &relpos, buttons, fwnd->tbarg);
     }
 
@@ -284,7 +290,7 @@ static void nxtk_mousein(NXWINDOW hwnd, FAR const struct nxgl_point_s *pos,
   else if (fwnd->fwcb->mousein != NULL &&
            pos->y >= fwnd->tbheight + CONFIG_NXTK_BORDERWIDTH)
     {
-      nxgl_vectsubtract(&relpos, &abspos, &fwnd->fwrect.pt1);
+      nxgl_vectsubtract(&relpos, pos, &fwrect.pt1);
       fwnd->fwcb->mousein((NXTKWINDOW)fwnd, &relpos, buttons, fwnd->fwarg);
     }
 
@@ -293,7 +299,7 @@ static void nxtk_mousein(NXWINDOW hwnd, FAR const struct nxgl_point_s *pos,
   else if (fwnd->tbcb->mousein != NULL &&
            pos->y < fwnd->tbheight + CONFIG_NXTK_BORDERWIDTH)
     {
-      nxgl_vectsubtract(&relpos, &abspos, &fwnd->tbrect.pt1);
+      nxgl_vectsubtract(&relpos, pos, &tbrect.pt1);
       fwnd->tbcb->mousein((NXTKWINDOW)fwnd, &relpos, buttons, fwnd->tbarg);
     }
 }
