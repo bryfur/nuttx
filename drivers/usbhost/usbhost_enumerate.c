@@ -815,37 +815,59 @@ int usbhost_enumerate(FAR struct usbhost_hubport_s *hport,
 
   if (id.base == USB_CLASS_PER_INTERFACE)
     {
-      /* Get the class identification information for this device from the
-       * interface descriptor(s).  Hmmm.. More logic is need to handle the
-       * case of multiple interface descriptors.
+#ifdef CONFIG_USBHOST_COMPOSITE
+      /* Several interfaces (a keyboard and a mouse behind one receiver, say):
+       * bind a class to each through the composite wrapper.  The port holds
+       * only one class (*devclass), and only that one is told when the
+       * device goes; binding the interfaces one by one below would leave
+       * the others behind, still polling a device that is gone.
+       * usbhost_composite() returns -ENOENT for a single interface.
        */
 
-      uint8_t ninterfaces = ((struct usb_cfgdesc_s *)buffer)->ninterfaces;
-      uint8_t ifnum = 0;
-
-      for (ifnum = 0; ifnum < ninterfaces; ifnum++)
+      ret = usbhost_composite(hport, buffer, cfglen, &id, devclass);
+      if (ret >= 0)
         {
-          uinfo("Parsing interface: %d\n", ifnum);
-          ret = usbhost_configdesc(buffer, cfglen, ifnum, &ifnum, &id);
-          if (ret < 0)
-            {
-              uerr("ERROR: usbhost_configdesc failed: %d\n", ret);
-              goto errout;
-            }
-
-          ret = usbhost_classbind(hport, buffer, cfglen, &id, devclass);
-          if (ret < 0)
-            {
-              uerr("ERROR: usbhost_classbind failed %d\n", ret);
-            }
+          uinfo("usbhost_composite has bound the composite device\n");
 #ifdef CONFIG_USBHOST_ANNOUNCE
-          else
+          bound = true;
+#endif
+        }
+      else
+#endif
+        {
+          /* Get the class identification information for this device from
+           * the interface descriptor(s).
+           */
+
+          uint8_t ninterfaces =
+            ((struct usb_cfgdesc_s *)buffer)->ninterfaces;
+          uint8_t ifnum = 0;
+
+          for (ifnum = 0; ifnum < ninterfaces; ifnum++)
             {
-              bound = true;
-            }
+              uinfo("Parsing interface: %d\n", ifnum);
+              ret = usbhost_configdesc(buffer, cfglen, ifnum, &ifnum, &id);
+              if (ret < 0)
+                {
+                  uerr("ERROR: usbhost_configdesc failed: %d\n", ret);
+                  goto errout;
+                }
+
+              ret = usbhost_classbind(hport, buffer, cfglen, &id,
+                                      devclass);
+              if (ret < 0)
+                {
+                  uerr("ERROR: usbhost_classbind failed %d\n", ret);
+                }
+#ifdef CONFIG_USBHOST_ANNOUNCE
+              else
+                {
+                  bound = true;
+                }
 #endif
 
-          ret = OK;
+              ret = OK;
+            }
         }
     }
   else
