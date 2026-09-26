@@ -99,7 +99,17 @@ uint32_t *arm_doirq(int irq, uint32_t *regs)
       irq_dispatch(irq, regs);
 #endif
 #ifdef CONFIG_ENABLE_ALL_SIGNALS
-      if (tcb->sigdeliver)
+      /* A signal for the running task that up_schedule_sigaction() could
+       * not set up from where it was called: set up the trampoline frame
+       * now.  Not if the task is in the trampoline already (saved_regs set,
+       * until arm_sigdeliver() restores the task): sigdeliver stays set
+       * while the handler runs, and a handler that makes the task switch
+       * (sem_post(), sched_unlock()) comes here with it; a second frame
+       * would overwrite saved_regs, and the trampolines would return to
+       * each other and then call a NULL sigdeliver.
+       */
+
+      if (tcb->sigdeliver && tcb->xcp.saved_regs == NULL)
         {
           /* Pendsv able to access running tcb with no critical section */
 
