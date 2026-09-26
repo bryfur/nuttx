@@ -41,6 +41,14 @@
 
 #include "arm_internal.h"
 
+/* Every stack from the kernel heap (CONFIG_ARM_STACKS_KERNEL_HEAP) */
+
+#ifdef CONFIG_ARM_STACKS_KERNEL_HEAP
+#  define STACKS_KHEAP 1
+#else
+#  define STACKS_KHEAP 0
+#endif
+
 /****************************************************************************
  * Public Functions
  ****************************************************************************/
@@ -119,7 +127,8 @@ int up_create_stack(struct tcb_s *tcb, size_t stack_size, uint8_t ttype)
 #ifdef CONFIG_MM_KERNEL_HEAP
       /* Use the kernel allocator if this is a kernel thread */
 
-      if (ttype == TCB_FLAG_TTYPE_KERNEL)
+      if (ttype == TCB_FLAG_TTYPE_KERNEL ||
+          STACKS_KHEAP)
         {
           tcb->stack_alloc_ptr = kmm_memalign(TLS_STACK_ALIGN, stack_size);
         }
@@ -135,7 +144,8 @@ int up_create_stack(struct tcb_s *tcb, size_t stack_size, uint8_t ttype)
 #ifdef CONFIG_MM_KERNEL_HEAP
       /* Use the kernel allocator if this is a kernel thread */
 
-      if (ttype == TCB_FLAG_TTYPE_KERNEL)
+      if (ttype == TCB_FLAG_TTYPE_KERNEL ||
+          STACKS_KHEAP)
         {
           tcb->stack_alloc_ptr = kmm_malloc(stack_size);
         }
