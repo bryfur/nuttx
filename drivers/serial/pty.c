@@ -119,6 +119,7 @@ struct pty_devpair_s
   bool pp_unlinked;             /* File has been unlinked */
   uint8_t pp_minor;             /* Minor device number */
   uint16_t pp_nopen;            /* Open file count */
+  struct winsize pp_winsize;    /* Window size (TIOCSWINSZ, TIOCGWINSZ) */
   sem_t pp_slavesem;            /* Slave lock semaphore */
   mutex_t pp_lock;              /* Mutual exclusion */
 };
@@ -847,6 +848,36 @@ static int pty_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
           dev->pd_oflag = termiosp->c_oflag;
           dev->pd_lflag = termiosp->c_lflag;
           ret = OK;
+        }
+        break;
+
+      /* The window size: set by the terminal emulator on the master (or
+       * by anyone on either side), read by programs on the slave
+       */
+
+      case TIOCSWINSZ:
+      case TIOCGWINSZ:
+        {
+          FAR struct winsize *ws = (FAR struct winsize *)((uintptr_t)arg);
+
+          if (ws == NULL)
+            {
+              ret = -EINVAL;
+            }
+          else if (cmd == TIOCSWINSZ)
+            {
+              devpair->pp_winsize = *ws;
+              ret = OK;
+            }
+          else if (devpair->pp_winsize.ws_row == 0)
+            {
+              ret = -ENOTTY;                     /* Never set */
+            }
+          else
+            {
+              *ws = devpair->pp_winsize;
+              ret = OK;
+            }
         }
         break;
 
