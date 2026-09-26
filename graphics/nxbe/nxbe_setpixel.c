@@ -97,6 +97,18 @@ static void nxbe_setpixel_dev(FAR struct nxbe_window_s *wnd,
   struct nxgl_rect_s rect;
   int i;
 
+#ifdef CONFIG_NX_COMPOSITOR
+  /* Composited: never drawn on the display directly */
+
+  if (nxbe_compose_on())
+    {
+      rect.pt1 = *pos;
+      rect.pt2 = *pos;
+      nxbe_compose_damage_wrect(wnd, &rect);
+      return;
+    }
+#endif
+
   /* Offset the position by the window origin */
 
   nxgl_vectoradd(&rect.pt1, pos, &wnd->bounds.pt1);

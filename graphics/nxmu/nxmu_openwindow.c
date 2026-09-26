@@ -78,6 +78,24 @@ void nxmu_openwindow(FAR struct nxbe_state_s *be,
 
   wnd->be           = be;
 
+#ifdef CONFIG_NX_COMPOSITOR
+  /* Composited, every window keeps its pixels (a layer window has none):
+   * the server draws the display from them
+   */
+
+  if (nxbe_compose_on())
+    {
+      if (NXBE_ISLAYER(wnd))
+        {
+          NXBE_CLRRAMBACKED(wnd);
+        }
+      else
+        {
+          NXBE_SETRAMBACKED(wnd);
+        }
+    }
+#endif
+
 #ifdef CONFIG_NX_RAMBACKED
   /* Allocate framebuffer memory if the per-window framebuffer feature has
    * been selected.
@@ -194,6 +212,12 @@ void nxmu_openwindow(FAR struct nxbe_state_s *be,
           be->topwnd        = wnd;
         }
     }
+
+#ifdef CONFIG_NX_COMPOSITOR
+  /* No effects yet, the normal layer */
+
+  nxbe_compose_open(wnd);
+#endif
 
   /* Report the initial size/position of the window to the client */
 

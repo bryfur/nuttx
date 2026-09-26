@@ -52,6 +52,14 @@ void nxbe_redrawbelow(FAR struct nxbe_state_s *be,
 {
   FAR struct nxbe_window_s *currwnd;
 
+#ifdef CONFIG_NX_COMPOSITOR
+  if (nxbe_compose_on())
+    {
+      nxbe_compose_damage(rect);
+      return;
+    }
+#endif
+
   for (currwnd = wnd; currwnd; currwnd = currwnd->below)
     {
       nxbe_redraw(be, currwnd, rect);

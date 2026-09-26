@@ -97,6 +97,16 @@ static inline void nxbe_fill_dev(FAR struct nxbe_window_s *wnd,
   struct nxbe_fill_s info;
   int i;
 
+#ifdef CONFIG_NX_COMPOSITOR
+  /* Composited: never drawn on the display directly */
+
+  if (nxbe_compose_on())
+    {
+      nxbe_compose_damage(rect);
+      return;
+    }
+#endif
+
 #if CONFIG_NX_NPLANES > 1
   for (i = 0; i < wnd->be->vinfo.nplanes; i++)
 #else

@@ -158,6 +158,16 @@ void nxmu_redraw(FAR struct nxbe_window_s *wnd,
 
   if (!NXBE_ISHIDDEN(wnd))
     {
+#ifdef CONFIG_NX_COMPOSITOR
+      /* Composited: the display is out of date there */
+
+      if (nxbe_compose_on())
+        {
+          nxbe_compose_damage(rect);
+          return;
+        }
+#endif
+
 #ifdef CONFIG_NX_RAMBACKED
       /* If this window supports a pre-window frame buffer, then we can just
        * update the device content from that framebuffer.

@@ -156,7 +156,12 @@ enum nxmsg_e
   NX_SVRMSG_SETBGCOLOR,       /* Set the color of the background */
   NX_SVRMSG_MOUSEIN,          /* New mouse report from mouse client */
   NX_SVRMSG_KBDIN,            /* New keyboard report from keyboard client */
-  NX_SVRMSG_REDRAWREQ         /* Request re-drawing of rectangular region */
+  NX_SVRMSG_REDRAWREQ,        /* Request re-drawing of rectangular region */
+  NX_SVRMSG_COMPOSITOR,       /* Compositor capabilities (nxcompose.h) */
+  NX_SVRMSG_SETEFFECTS,       /* Window effects and layer */
+  NX_SVRMSG_SETDLIST,         /* A layer window's display list */
+  NX_SVRMSG_GPUOPS,           /* Operations of the display hardware */
+  NX_SVRMSG_SETLUT            /* Load a shape table */
 };
 
 /* Server-to-Client Message Structures **************************************/
@@ -533,6 +538,44 @@ struct nxsvrmsg_redrawreq_s
   FAR struct nxbe_window_s *wnd;   /* The window to be redrawn  */
   struct nxgl_rect_s rect;         /* Describes the rectangular region to be redrawn */
 };
+
+#ifdef CONFIG_NX_COMPOSITOR
+/* The compositor (nxcompose.h).  Messages that carry the client's memory
+ * (operations, a table) or want an answer are waited for: the server posts
+ * sem_done once it is finished with them.
+ */
+
+struct nxsvrmsg_compositor_s
+{
+  uint32_t msgid;                  /* NX_SVRMSG_COMPOSITOR */
+  FAR int *caps;                   /* Where the answer goes */
+  FAR sem_t *sem_done;
+};
+
+struct nxsvrmsg_seteffects_s
+{
+  uint32_t msgid;                  /* NX_SVRMSG_SETEFFECTS */
+  FAR struct nxbe_window_s *wnd;
+  struct nx_effects_s fx;
+};
+
+struct nxsvrmsg_gpuops_s
+{
+  uint32_t msgid;                  /* NX_SVRMSG_SETDLIST, NX_SVRMSG_GPUOPS */
+  FAR struct nxbe_window_s *wnd;
+  FAR const struct nx_gpuop_s *ops;
+  int nops;
+  FAR sem_t *sem_done;
+};
+
+struct nxsvrmsg_setlut_s
+{
+  uint32_t msgid;                  /* NX_SVRMSG_SETLUT */
+  int slot;
+  FAR const uint8_t *lut;          /* NX_BLEND_LUT_N x NX_BLEND_LUT_N */
+  FAR sem_t *sem_done;
+};
+#endif
 
 /****************************************************************************
  * Public Data

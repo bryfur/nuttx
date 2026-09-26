@@ -77,6 +77,16 @@ void nxbe_flush(FAR struct nxbe_window_s *wnd,
                 FAR const struct nxgl_point_s *origin,
                 unsigned int stride)
 {
+#ifdef CONFIG_NX_COMPOSITOR
+  /* Composited: the display is out of date there */
+
+  if (nxbe_compose_on())
+    {
+      nxbe_compose_damage_wrect(wnd, dest);
+      return;
+    }
+#endif
+
 #ifdef CONFIG_NX_ACCEL
   /* A window in a surface: the hardware moves the pixels to the display */
 

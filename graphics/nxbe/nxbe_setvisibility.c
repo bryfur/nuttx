@@ -94,6 +94,13 @@ void nxbe_show_window(FAR struct nxbe_window_s *wnd)
 
       nxmu_redraw(wnd, &wnd->bounds);
     }
+
+#ifdef CONFIG_NX_COMPOSITOR
+  /* Into its layer, and all it touches out of date */
+
+  nxbe_compose_restack(wnd, true);
+  nxbe_compose_damage_window(wnd);
+#endif
 }
 
 /****************************************************************************
@@ -118,6 +125,12 @@ void nxbe_hide_window(FAR struct nxbe_window_s *wnd)
   /* The background window should never be hidden */
 
   DEBUGASSERT(wnd != &be->bkgd);
+
+#ifdef CONFIG_NX_COMPOSITOR
+  /* All it touched will be out of date */
+
+  nxbe_compose_damage_window(wnd);
+#endif
 
   /* Remove this window from the hiearachy */
 

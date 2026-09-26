@@ -34,6 +34,7 @@
 
 #include <nuttx/nx/nx.h>
 #include <nuttx/nx/nxglib.h>
+#include <nuttx/nx/nxcompose.h>
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -66,6 +67,8 @@
 #define NXBE_WINDOW_RAMBACKED (1 << 2) /* Bit 2: Window is backed by a framebuffer */
 #define NXBE_WINDOW_MODAL     (1 << 3) /* Bit 3: Window is in a focused, modal state */
 #define NXBE_WINDOW_HIDDEN    (1 << 4) /* Bit 4: Window is hidden */
+#define NXBE_WINDOW_LAYER     (1 << 5) /* Bit 5: No pixels: drawn from a display
+                                        *        list (CONFIG_NX_COMPOSITOR) */
 
 /* Valid user flags for different window types.  This is the subset of flags
  * that may be passed with nx_openwindow() or nxtk_openwindow.  Most of the
@@ -77,7 +80,10 @@
  * setting from the point of view of lower layers.
  */
 
-#ifdef CONFIG_NX_RAMBACKED
+#if defined(CONFIG_NX_COMPOSITOR)
+#  define NX_WINDOW_USER      (NXBE_WINDOW_RAMBACKED | NXBE_WINDOW_HIDDEN | \
+                               NXBE_WINDOW_LAYER)
+#elif defined(CONFIG_NX_RAMBACKED)
 #  define NX_WINDOW_USER      (NXBE_WINDOW_RAMBACKED | NXBE_WINDOW_HIDDEN)
 #else
 #  define NX_WINDOW_USER      NXBE_WINDOW_HIDDEN
@@ -118,6 +124,9 @@
   do { (wnd)->flags |= NXBE_WINDOW_MODAL; } while (0)
 #define NXBE_CLRMODAL(wnd) \
   do { (wnd)->flags &= ~NXBE_WINDOW_MODAL; } while (0)
+
+#define NXBE_ISLAYER(wnd) \
+  (((wnd)->flags & NXBE_WINDOW_LAYER) != 0)
 
 #define NXBE_ISHIDDEN(wnd) \
   (((wnd)->flags & NXBE_WINDOW_HIDDEN) != 0)
@@ -182,6 +191,14 @@ struct nxbe_window_s
   struct nxgl_point_s surfpos;        /* Where the surface is */
   struct nxgl_size_s surfsize;        /* Its size (the window's, when made) */
 #endif
+#endif
+
+#ifdef CONFIG_NX_COMPOSITOR
+  /* How the compositor draws the window (nxcompose.h) */
+
+  struct nx_effects_s fx;
+  FAR struct nx_gpuop_s *dlist;       /* NXBE_WINDOW_LAYER: its operations */
+  int ndlist;
 #endif
 
   /* Client state information this is provide in window callbacks

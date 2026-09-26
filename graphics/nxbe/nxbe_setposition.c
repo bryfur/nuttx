@@ -160,6 +160,21 @@ void nxbe_setposition(FAR struct nxbe_window_s *wnd,
 
   DEBUGASSERT(wnd != NULL && pos != NULL);
 
+#ifdef CONFIG_NX_COMPOSITOR
+  /* Composited: where it was and where it is are out of date */
+
+  if (nxbe_compose_on())
+    {
+      nxbe_compose_damage_window(wnd);
+      nxgl_rectoffset(&wnd->bounds, &wnd->bounds,
+                      pos->x - wnd->bounds.pt1.x,
+                      pos->y - wnd->bounds.pt1.y);
+      nxmu_reportposition(wnd);
+      nxbe_compose_damage_window(wnd);
+      return;
+    }
+#endif
+
   /* Back out the old window origin position from the bounding box */
 
   nxgl_rectoffset(&rect,

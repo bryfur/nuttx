@@ -214,6 +214,16 @@ void nxbe_bitmap_dev(FAR struct nxbe_window_s *wnd,
       return;
     }
 
+#ifdef CONFIG_NX_COMPOSITOR
+  /* Composited: never drawn on the display directly */
+
+  if (nxbe_compose_on())
+    {
+      nxbe_compose_damage_wrect(wnd, dest);
+      return;
+    }
+#endif
+
   /* Verify that the destination rectangle begins "below" and to the "right"
    * of the origin
    */

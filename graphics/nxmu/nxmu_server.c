@@ -71,8 +71,21 @@
 static void nxmu_accel_idle(mqd_t mqd)
 {
   struct mq_attr attr;
+  bool idle = mq_getattr(mqd, &attr) < 0 || attr.mq_curmsgs == 0;
 
-  if (mq_getattr(mqd, &attr) < 0 || attr.mq_curmsgs == 0)
+#ifdef CONFIG_NX_COMPOSITOR
+  /* Composite what has changed: when nothing more is coming, or when it
+   * has waited long enough in a stream of messages
+   */
+
+  if (idle || nxbe_compose_due())
+    {
+      nxbe_compose_run();
+      idle = true;
+    }
+#endif
+
+  if (idle)
     {
       nxbe_accel_flush();
     }
@@ -659,6 +672,60 @@ int nx_runinstance(FAR const char *mqname, FAR NX_DRIVERTYPE *dev)
               nxmu_redraw(redrawmsg->wnd, &redrawmsg->rect);
             }
             break;
+
+#ifdef CONFIG_NX_COMPOSITOR
+          case NX_SVRMSG_COMPOSITOR: /* Compositor capabilities */
+            {
+              FAR struct nxsvrmsg_compositor_s *compmsg =
+                (FAR struct nxsvrmsg_compositor_s *)buffer;
+              *compmsg->caps = nxbe_compose_on() ? NX_CAP_COMPOSITOR : 0;
+              nxsem_post(compmsg->sem_done);
+            }
+            break;
+
+          case NX_SVRMSG_SETEFFECTS: /* Window effects and layer */
+            {
+              FAR struct nxsvrmsg_seteffects_s *fxmsg =
+                (FAR struct nxsvrmsg_seteffects_s *)buffer;
+              nxbe_compose_seteffects(fxmsg->wnd, &fxmsg->fx);
+            }
+            break;
+
+          case NX_SVRMSG_SETDLIST: /* A layer window's operations */
+          case NX_SVRMSG_GPUOPS:   /* Operations into a window */
+            {
+              FAR struct nxsvrmsg_gpuops_s *opsmsg =
+                (FAR struct nxsvrmsg_gpuops_s *)buffer;
+              if (msg->msgid == NX_SVRMSG_SETDLIST)
+                {
+                  nxbe_compose_setdlist(opsmsg->wnd, opsmsg->ops,
+                                        opsmsg->nops);
+                }
+              else
+                {
+                  nxbe_compose_gpuops(opsmsg->wnd, opsmsg->ops,
+                                      opsmsg->nops);
+                }
+
+              nxsem_post(opsmsg->sem_done);
+            }
+            break;
+
+          case NX_SVRMSG_SETLUT: /* Load a shape table */
+            {
+              FAR struct nxsvrmsg_setlut_s *lutmsg =
+                (FAR struct nxsvrmsg_setlut_s *)buffer;
+              if (nxbe_compose_on())
+                {
+                  g_nxaccel->set_lut(lutmsg->slot,
+                                     (FAR const uint8_t (*)[NX_BLEND_LUT_N])
+                                     lutmsg->lut);
+                }
+
+              nxsem_post(lutmsg->sem_done);
+            }
+            break;
+#endif
 
           /* Messages sent to the background window *************************/
 

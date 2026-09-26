@@ -300,5 +300,11 @@ int nxbe_configure(FAR NX_DRIVERTYPE *dev, FAR struct nxbe_state_s *be)
 #endif
     }
 
+#ifdef CONFIG_NX_COMPOSITOR
+  /* And composite the display, if the hardware blends */
+
+  nxbe_compose_install(be);
+#endif
+
   return OK;
 }

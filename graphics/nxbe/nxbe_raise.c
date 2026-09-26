@@ -136,4 +136,11 @@ void nxbe_raise(FAR struct nxbe_window_s *wnd)
 
       nxmu_redraw(wnd, &wnd->bounds);
     }
+
+#ifdef CONFIG_NX_COMPOSITOR
+  /* The top of its layer; all it touches is out of date */
+
+  nxbe_compose_restack(wnd, true);
+  nxbe_compose_damage_window(wnd);
+#endif
 }

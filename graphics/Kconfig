@@ -152,6 +152,37 @@ config NX_ACCEL
 		hardware move of what is already on the screen, and only what
 		it uncovers is redrawn.
 
+config NX_COMPOSITOR
+	bool "Composite the display"
+	default n
+	depends on NX_ACCEL && NX_RAMBACKED
+	---help---
+		With display hardware that blends (nx_accel_s blend) and has
+		surfaces, every window is kept in a surface and the server
+		composites the display from them, bottom to top, into an
+		off-screen band that is then moved to the screen: windows can
+		have round corners, soft shadows, a translucent tinted backdrop
+		and an opacity (nx_seteffects()), windows can be layers drawn
+		from a list of operations instead of pixels (nx_setdisplaylist()),
+		and clients can blend into their windows (nx_gpuops()).  Without
+		a blending board at run time the server works as without this
+		option.
+
+if NX_COMPOSITOR
+
+config NX_COMPOSITOR_BANDH
+	int "Composition band height"
+	default 256
+	---help---
+		Lines of off-screen surface the display is composited in: a
+		damaged area taller than this is composited in bands.
+
+config NX_COMPOSITOR_MAXDAMAGE
+	int "Damaged rectangles held"
+	default 16
+
+endif
+
 config NX_UPDATE
 	bool "Display update hooks"
 	default FB_UPDATE && !NX_LCDDRIVER

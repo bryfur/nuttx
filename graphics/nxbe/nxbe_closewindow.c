@@ -68,6 +68,12 @@ void nxbe_closewindow(FAR struct nxbe_window_s *wnd)
 
   DEBUGASSERT(wnd != &be->bkgd);
 
+#ifdef CONFIG_NX_COMPOSITOR
+  /* All it touched will be out of date; its display list goes */
+
+  nxbe_compose_close(wnd);
+#endif
+
   /* Are we closing a modal window? */
 
   if (NXBE_ISMODAL(wnd))

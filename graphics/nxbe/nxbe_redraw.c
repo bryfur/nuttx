@@ -90,6 +90,16 @@ void nxbe_redraw(FAR struct nxbe_state_s *be,
 
   nxgl_rectintersect(&remaining, rect, &be->bkgd.bounds);
   nxgl_rectintersect(&remaining, &remaining, &wnd->bounds);
+
+#ifdef CONFIG_NX_COMPOSITOR
+  /* Composited: the display is out of date there */
+
+  if (nxbe_compose_on())
+    {
+      nxbe_compose_damage(&remaining);
+      return;
+    }
+#endif
   if (!nxgl_nullrect(&remaining))
     {
       /* Now, request to re-draw any visible rectangular regions not obscured

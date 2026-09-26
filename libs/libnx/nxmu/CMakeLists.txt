@@ -58,6 +58,10 @@ if(CONFIG_NX)
       nx_setsize.c
       nx_setvisibility.c)
 
+  if(CONFIG_NX_COMPOSITOR)
+    list(APPEND SRCS nx_compose.c)
+  endif()
+
   if(CONFIG_NX_HWCURSOR)
     list(APPEND SRCS nx_cursor.c)
   elseif(CONFIG_NX_SWCURSOR)

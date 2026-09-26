@@ -113,6 +113,16 @@ nxbe_filltrapezoid_dev(FAR struct nxbe_window_s *wnd,
   struct nxbe_filltrap_s info;
   int i;
 
+#ifdef CONFIG_NX_COMPOSITOR
+  /* Composited: never drawn on the display directly */
+
+  if (nxbe_compose_on())
+    {
+      nxbe_compose_damage(bounds);
+      return;
+    }
+#endif
+
   info.cops.visible  = nxbe_clipfilltrapezoid;
   info.cops.obscured = nxbe_clipnull;
 

@@ -34,6 +34,7 @@
 
 #include <nuttx/nx/nxglib.h>
 #include <nuttx/video/vnc.h>
+#include <nuttx/nx/nxcompose.h>
 
 /****************************************************************************
  * Pre-processor Definitions

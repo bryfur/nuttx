@@ -37,6 +37,10 @@ CSRCS += nx_getrectangle.c nx_lower.c nx_modal.c nx_move.c nx_openwindow.c
 CSRCS += nx_raise.c nx_redrawreq.c nx_setpixel.c nx_setposition.c
 CSRCS += nx_setsize.c nx_setvisibility.c
 
+ifeq ($(CONFIG_NX_COMPOSITOR),y)
+CSRCS += nx_compose.c
+endif
+
 ifeq ($(CONFIG_NX_HWCURSOR),y)
 CSRCS += nx_cursor.c
 else ifeq ($(CONFIG_NX_SWCURSOR),y)

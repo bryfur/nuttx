@@ -207,6 +207,20 @@ static inline void nxbe_move_dev(FAR struct nxbe_window_s *wnd,
 #endif
   int i;
 
+#ifdef CONFIG_NX_COMPOSITOR
+  /* Composited: never drawn on the display directly */
+
+  if (nxbe_compose_on())
+    {
+      struct nxgl_rect_s moved;
+
+      nxgl_rectoffset(&moved, rect, offset->x, offset->y);
+      nxbe_compose_damage(rect);
+      nxbe_compose_damage(&moved);
+      return;
+    }
+#endif
+
   info.cops.visible  = nxbe_clipmovedest;
   info.cops.obscured = nxbe_clipnull;
   info.offset.x      = offset->x;
@@ -499,7 +513,11 @@ static inline void nxbe_move_pwfb(FAR struct nxbe_window_s *wnd,
    * does not bring (a terminal's scroll becomes one move and a line).
    */
 
-  if (wnd->above == NULL && !NXBE_ISHIDDEN(wnd))
+  if (wnd->above == NULL && !NXBE_ISHIDDEN(wnd)
+#ifdef CONFIG_NX_COMPOSITOR
+      && !nxbe_compose_on()
+#endif
+     )
     {
       nxbe_move_pwfbtop(wnd, rect, offset);
       return;

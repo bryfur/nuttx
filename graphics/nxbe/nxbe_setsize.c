@@ -276,6 +276,12 @@ void nxbe_setsize(FAR struct nxbe_window_s *wnd,
 
   DEBUGASSERT(wnd != NULL && size != NULL);
 
+#ifdef CONFIG_NX_COMPOSITOR
+  /* Composited: all it touched is out of date (and all it touches, below) */
+
+  nxbe_compose_damage_window(wnd);
+#endif
+
   /* Save the 'before' size of the window's bounding box */
 
   nxgl_rectcopy(&bounds, &wnd->bounds);
@@ -314,4 +320,8 @@ void nxbe_setsize(FAR struct nxbe_window_s *wnd,
    */
 
   nxbe_redrawbelow(wnd->be, wnd, &bounds);
+
+#ifdef CONFIG_NX_COMPOSITOR
+  nxbe_compose_damage_window(wnd);
+#endif
 }

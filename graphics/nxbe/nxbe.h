@@ -349,6 +349,35 @@ void nxbe_surface_present(FAR struct nxbe_window_s *wnd,
 #endif
 
 /****************************************************************************
+ * CONFIG_NX_COMPOSITOR (nxbe_compose.c): the display is composited from
+ * the windows' surfaces.  Changes only record damage (display
+ * coordinates; _wrect: window coordinates; _window: all the window
+ * touches), composited by nxbe_compose_run() when the server is idle or
+ * nxbe_compose_due().  nxbe_compose_on() is false if the hardware cannot
+ * blend: NX then draws as without the compositor.
+ ****************************************************************************/
+
+#ifdef CONFIG_NX_COMPOSITOR
+void nxbe_compose_install(FAR struct nxbe_state_s *be);
+bool nxbe_compose_on(void);
+void nxbe_compose_damage(FAR const struct nxgl_rect_s *rect);
+void nxbe_compose_damage_wrect(FAR struct nxbe_window_s *wnd,
+                               FAR const struct nxgl_rect_s *rel);
+void nxbe_compose_damage_window(FAR struct nxbe_window_s *wnd);
+void nxbe_compose_restack(FAR struct nxbe_window_s *wnd, bool top);
+void nxbe_compose_open(FAR struct nxbe_window_s *wnd);
+void nxbe_compose_close(FAR struct nxbe_window_s *wnd);
+void nxbe_compose_seteffects(FAR struct nxbe_window_s *wnd,
+                             FAR const struct nx_effects_s *fx);
+void nxbe_compose_setdlist(FAR struct nxbe_window_s *wnd,
+                           FAR const struct nx_gpuop_s *ops, int nops);
+void nxbe_compose_gpuops(FAR struct nxbe_window_s *wnd,
+                         FAR const struct nx_gpuop_s *ops, int nops);
+bool nxbe_compose_due(void);
+void nxbe_compose_run(void);
+#endif
+
+/****************************************************************************
  * Name: nx_configure
  *
  * Description:

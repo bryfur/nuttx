@@ -37,6 +37,52 @@
  * Public Types
  ****************************************************************************/
 
+/* nx_blend_s mode: the source (bits 1:0), the shape (bits 3:2), a colour
+ * key and dithering; slot: the shape table.  For the destination pixel D at
+ * (x, y) and the source pixel s:
+ *
+ *   a   = alpha x f(source) x m(shape)            (each 0..255)
+ *   out = S * a + D * (1 - a), per channel
+ *
+ * LUT shape: m = lut[slot][min(ddy >> shift, 31)][min(ddx >> shift, 31)],
+ * ddx the distance left of p[0] or right of p[2] (else 0), ddy above p[1]
+ * or below p[3]: a rectangle whose inner rectangle p[] is inset by r from
+ * it, with a table of a disc's coverage, has round corners of radius r;
+ * with a falloff, it is a soft shadow.  Ramps: m = clamp((p[2] + (x - p[0])
+ * * p[1]) / 256, 0, 255) (x, or y).  Shape coordinates are the display's,
+ * like dest.
+ */
+
+#define NX_BLEND_SRC_COLOUR   0x00     /* S = colour, f = 255 */
+#define NX_BLEND_SRC_RGB      0x01     /* S = s, f = 255 */
+#define NX_BLEND_SRC_ARGB4444 0x02     /* S = s's RGB, f = s's A */
+#define NX_BLEND_SRC_A8       0x03     /* S = colour, f = s & 0xff */
+#define NX_BLEND_SRC_MASK     0x03
+#define NX_BLEND_MOD_NONE     0x00
+#define NX_BLEND_MOD_LUT      0x04
+#define NX_BLEND_MOD_HRAMP    0x08
+#define NX_BLEND_MOD_VRAMP    0x0c
+#define NX_BLEND_MOD_MASK     0x0c
+#define NX_BLEND_KEY          0x40     /* s == key: f = 0 */
+#define NX_BLEND_DITHER       0x80
+
+#define NX_BLEND_LUT_SLOTS    8
+#define NX_BLEND_LUT_N        32
+
+struct nx_blend_s
+{
+  struct nxgl_rect_s dest;             /* Where (clipped, on the device) */
+  struct nxgl_point_s src;             /* Image sources: dest.pt1's source */
+  nxgl_mxpixel_t colour;
+  uint8_t alpha;
+  uint8_t mode;                        /* NX_BLEND_* */
+  uint8_t shift;                       /* LUT distances >> shift */
+  uint8_t slot;                        /* LUT: which table */
+  uint16_t key;
+  int16_t p[4];                        /* LUT: inner x0, y0, x1, y1;
+                                        * ramp: origin, step, start (8.8) */
+};
+
 /* Display operations done by the display hardware (a GPU) instead of by
  * the NX server writing the framebuffer (CONFIG_NX_ACCEL).  With these the
  * server does not touch the framebuffer memory at all, and the update
@@ -93,6 +139,22 @@ struct nx_accel_s
                              FAR struct nxgl_point_s *pos);
   CODE void (*surface_free)(FAR const struct nxgl_point_s *pos,
                             nxgl_coord_t w, nxgl_coord_t h);
+
+  /* Per-pixel blending, optional (NULL): a colour or an image blended into
+   * a rectangle with an alpha made of a global value, the image's own
+   * alpha and a shape (a lookup table of distances from an inner
+   * rectangle, or a ramp), struct nx_blend_s.  With it and surfaces, the
+   * server composites (CONFIG_NX_COMPOSITOR).
+   */
+
+  CODE void (*blend)(FAR const struct nx_blend_s *op);
+
+  /* Load one of the shape tables (NX_BLEND_LUT_SLOTS of them, each
+   * NX_BLEND_LUT_N x NX_BLEND_LUT_N alpha values indexed [ddy][ddx])
+   */
+
+  CODE void (*set_lut)(int slot,
+                       FAR const uint8_t lut[NX_BLEND_LUT_N][NX_BLEND_LUT_N]);
 };
 
 /****************************************************************************
