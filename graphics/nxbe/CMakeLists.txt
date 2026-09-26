@@ -55,4 +55,8 @@ if(CONFIG_NX_UPDATE)
   list(APPEND SRCS nxbe_notify_rectangle.c)
 endif()
 
+if(CONFIG_NX_ACCEL)
+  list(APPEND SRCS nxbe_accel.c)
+endif()
+
 target_sources(graphics PRIVATE ${SRCS})

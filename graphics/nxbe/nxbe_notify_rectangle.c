@@ -61,6 +61,15 @@ void nxbe_notify_rectangle(FAR NX_DRIVERTYPE *dev,
 {
   struct fb_area_s area;
 
+#ifdef CONFIG_NX_ACCEL
+  /* The hardware drew it: nothing in the framebuffer to pass on */
+
+  if (g_nxaccel != NULL)
+    {
+      return;
+    }
+#endif
+
   nxgl_rect2area(&area, rect);
   dev->updatearea(dev, &area);
 }

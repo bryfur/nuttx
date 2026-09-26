@@ -140,6 +140,18 @@ config NX_WRITEONLY
 		Automatically defined if NX_LCDDRIVER and LCD_NOGETRUN are
 		defined.
 
+config NX_ACCEL
+	bool "Accelerated display operations"
+	default n
+	depends on !NX_LCDDRIVER && !NX_SWCURSOR
+	---help---
+		The board provides the display operations (fill, move, copy an
+		image in, read back) done by display hardware such as a GPU, with
+		board_nx_accel() (include/nuttx/nx/nxaccel.h).  The NX server
+		then never draws into the framebuffer: a window moves with one
+		hardware move of what is already on the screen, and only what
+		it uncovers is redrawn.
+
 config NX_UPDATE
 	bool "Display update hooks"
 	default FB_UPDATE && !NX_LCDDRIVER

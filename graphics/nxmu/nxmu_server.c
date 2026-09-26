@@ -58,6 +58,28 @@
  ****************************************************************************/
 
 /****************************************************************************
+ * Name: nxmu_accel_idle
+ *
+ * Description:
+ *   If no message is waiting, let the display hardware have what it has
+ *   batched: a burst of messages goes out together, and nothing is left
+ *   behind once the burst ends.
+ *
+ ****************************************************************************/
+
+#ifdef CONFIG_NX_ACCEL
+static void nxmu_accel_idle(mqd_t mqd)
+{
+  struct mq_attr attr;
+
+  if (mq_getattr(mqd, &attr) < 0 || attr.mq_curmsgs == 0)
+    {
+      nxbe_accel_flush();
+    }
+}
+#endif
+
+/****************************************************************************
  * Name: nxmu_disconnect
  ****************************************************************************/
 
@@ -330,6 +352,10 @@ int nx_runinstance(FAR const char *mqname, FAR NX_DRIVERTYPE *dev)
 
   for (; ; )
     {
+#ifdef CONFIG_NX_ACCEL
+      nxmu_accel_idle(nxmu.conn.crdmq);
+#endif
+
       /* Send what clients had no room for, then receive the next server
        * message; while anything is still held, wait no more than
        * NXMU_FLUSH_MS for one, so it goes out as room comes.

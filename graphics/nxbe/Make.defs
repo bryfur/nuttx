@@ -41,6 +41,10 @@ ifeq ($(CONFIG_NX_UPDATE),y)
 CSRCS += nxbe_notify_rectangle.c
 endif
 
+ifeq ($(CONFIG_NX_ACCEL),y)
+CSRCS += nxbe_accel.c
+endif
+
 DEPPATH += --dep-path nxbe
 CFLAGS += ${INCDIR_PREFIX}$(TOPDIR)/graphics/nxbe
 VPATH += :nxbe

@@ -36,6 +36,7 @@
 #include <nuttx/nx/nxglib.h>
 #include <nuttx/nx/nxcursor.h>
 #include <nuttx/nx/nxbe.h>
+#include <nuttx/nx/nxaccel.h>
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -312,6 +313,25 @@ int nxbe_colormap(FAR NX_DRIVERTYPE *dev);
 #ifdef CONFIG_NX_UPDATE
 void nxbe_notify_rectangle(FAR NX_DRIVERTYPE *dev,
                            FAR const struct nxgl_rect_s *rect);
+#endif
+
+/****************************************************************************
+ * Name: nxbe_accel_install, nxbe_accel_flush
+ *
+ * Description:
+ *   CONFIG_NX_ACCEL (nxbe_accel.c): put the board's accelerated operations
+ *   (board_nx_accel()) in place of the plane's framebuffer rasterizers;
+ *   let the board send what it has batched.  g_nxaccel is non-NULL once
+ *   they are in place.
+ *
+ ****************************************************************************/
+
+#ifdef CONFIG_NX_ACCEL
+EXTERN FAR const struct nx_accel_s *g_nxaccel;
+
+void nxbe_accel_install(FAR struct nxbe_plane_s *plane, int display,
+                        int planeno);
+void nxbe_accel_flush(void);
 #endif
 
 /****************************************************************************

@@ -292,6 +292,12 @@ int nxbe_configure(FAR NX_DRIVERTYPE *dev, FAR struct nxbe_state_s *be)
                i, be->plane[i].pinfo.bpp);
           return -ENOSYS;
         }
+
+#ifdef CONFIG_NX_ACCEL
+      /* The board's hardware operations, if it has them, instead */
+
+      nxbe_accel_install(&be->plane[i], 0, i);
+#endif
     }
 
   return OK;
