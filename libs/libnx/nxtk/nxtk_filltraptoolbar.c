@@ -73,7 +73,7 @@ int nxtk_filltraptoolbar(NXTKWINDOW hfwnd,
 
   /* Perform the fill, clipping to the client window */
 
-  nxgl_rectoffset(&relclip, &fwnd->tbrect, -fwnd->wnd.bounds.pt1.x,
-                  -fwnd->wnd.bounds.pt1.y);
+  nxgl_rectoffset(&relclip, &fwnd->tbrect, -fwnd->fwbase.x,
+                  -fwnd->fwbase.y);
   return nx_filltrapezoid((NXWINDOW)hfwnd, &relclip, trap, color);
 }

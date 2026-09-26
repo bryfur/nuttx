@@ -81,6 +81,6 @@ void nxtk_subwindowclip(FAR struct nxtk_framedwindow_s *fwnd,
    */
 
   nxgl_rectoffset(dest, &tmp,
-                  -fwnd->wnd.bounds.pt1.x,
-                  -fwnd->wnd.bounds.pt1.y);
+                  -fwnd->fwbase.x,
+                  -fwnd->fwbase.y);
 }

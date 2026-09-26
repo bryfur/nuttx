@@ -105,7 +105,7 @@ int nxtk_bitmapwindow(NXTKWINDOW hfwnd, FAR const struct nxgl_rect_s *dest,
    * the client subwindow
    */
 
-  nxgl_vectsubtract(&wndorigin, &wndorigin, &fwnd->wnd.bounds.pt1);
+  nxgl_vectsubtract(&wndorigin, &wndorigin, &fwnd->fwbase);
 
   /* Then copy the bitmap */
 

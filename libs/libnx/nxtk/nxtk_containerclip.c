@@ -73,8 +73,8 @@ void nxtk_containerclip(FAR struct nxtk_framedwindow_s *fwnd,
    * the sub-window to the same origin.
    */
 
-  nxgl_rectoffset(&relbounds, bounds, -fwnd->wnd.bounds.pt1.x,
-                  -fwnd->wnd.bounds.pt1.y);
+  nxgl_rectoffset(&relbounds, bounds, -fwnd->fwbase.x,
+                  -fwnd->fwbase.y);
 
   /* The intersection then leaves the portion of the containing window that
    * needs to be updated window that needs to be updated.
@@ -84,6 +84,6 @@ void nxtk_containerclip(FAR struct nxtk_framedwindow_s *fwnd,
 
   /* Offset this so that is relative to client subwindow origin */
 
-  nxgl_rectoffset(dest, dest, fwnd->wnd.bounds.pt1.x - bounds->pt1.x,
-                  fwnd->wnd.bounds.pt1.y - bounds->pt1.y);
+  nxgl_rectoffset(dest, dest, fwnd->fwbase.x - bounds->pt1.x,
+                  fwnd->fwbase.y - bounds->pt1.y);
 }

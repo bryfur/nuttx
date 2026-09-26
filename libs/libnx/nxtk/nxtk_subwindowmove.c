@@ -113,6 +113,6 @@ void nxtk_subwindowmove(FAR struct nxtk_framedwindow_s *fwnd,
    * not the client subwindow
    */
 
-  nxgl_rectoffset(destrect, &abssrc, -fwnd->wnd.bounds.pt1.x,
-                  -fwnd->wnd.bounds.pt1.y);
+  nxgl_rectoffset(destrect, &abssrc, -fwnd->fwbase.x,
+                  -fwnd->fwbase.y);
 }

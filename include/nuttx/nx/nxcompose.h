@@ -58,7 +58,8 @@
 
 #define NX_LUT_CORNER          0       /* A disc of NX_COMPOSITOR_RADIUS */
 #define NX_LUT_SHADOW          1       /* A soft shadow around it */
-#define NX_LUT_CLIENT0         2       /* Free for clients: 2 to 7 */
+#define NX_LUT_CLIENT0         2       /* Free for clients: 2 to 6 */
+#define NX_LUT_RING            7       /* A 1-pixel ring on the NX_LUT_CORNER disc */
 
 #define NX_COMPOSITOR_RADIUS   10
 
@@ -101,6 +102,7 @@ struct nx_effects_s
   int8_t   shadowdy;             /* Shadow offset down, pixels */
   uint8_t  backdrop;             /* Alpha of a tint drawn behind the window
                                   * (translucent panels), 0: none */
+  uint8_t  border;               /* Alpha of a 1-pixel light edge, 0: none */
   nxgl_mxpixel_t tint;           /* ... its colour */
   nxgl_mxpixel_t key;            /* NX_FX_KEY: the clear colour */
 };
@@ -194,7 +196,7 @@ int nx_gpuops(FAR void *hwnd, FAR const struct nx_gpuop_s *ops, int nops);
  * Name: nx_setlut
  *
  * Description:
- *   Load shape table slot (NX_LUT_CLIENT0 to NX_BLEND_LUT_SLOTS - 1) with
+ *   Load shape table slot (NX_LUT_CLIENT0 to NX_LUT_RING - 1) with
  *   NX_BLEND_LUT_N x NX_BLEND_LUT_N alpha values, [ddy][ddx].
  *
  ****************************************************************************/

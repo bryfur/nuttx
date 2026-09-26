@@ -236,9 +236,9 @@ static void nxtk_mousein(NXWINDOW hwnd, FAR const struct nxgl_point_s *pos,
    */
 
   nxgl_rectoffset(&fwrect, &fwnd->fwrect,
-                  -fwnd->wnd.bounds.pt1.x, -fwnd->wnd.bounds.pt1.y);
+                  -fwnd->fwbase.x, -fwnd->fwbase.y);
   nxgl_rectoffset(&tbrect, &fwnd->tbrect,
-                  -fwnd->wnd.bounds.pt1.x, -fwnd->wnd.bounds.pt1.y);
+                  -fwnd->fwbase.x, -fwnd->fwbase.y);
 
   /* Route by where the pointer is while no button is down.  From the
    * moment one goes down, everything up to and including its release goes

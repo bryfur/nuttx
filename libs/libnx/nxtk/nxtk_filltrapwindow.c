@@ -76,13 +76,13 @@ int nxtk_filltrapwindow(NXTKWINDOW hfwnd,
   /* Move the trapezoid from window contents area to window area */
 
   nxgl_trapoffset(&reltrap, trap,
-                  fwnd->fwrect.pt1.x - fwnd->wnd.bounds.pt1.x,
-                  fwnd->fwrect.pt1.y - fwnd->wnd.bounds.pt1.y);
+                  fwnd->fwrect.pt1.x - fwnd->fwbase.x,
+                  fwnd->fwrect.pt1.y - fwnd->fwbase.y);
 
   /* Perform the fill, clipping to the client window */
 
-  nxgl_rectoffset(&relclip, &fwnd->fwrect, -fwnd->wnd.bounds.pt1.x,
-                  -fwnd->wnd.bounds.pt1.y);
+  nxgl_rectoffset(&relclip, &fwnd->fwrect, -fwnd->fwbase.x,
+                  -fwnd->fwbase.y);
 
   return nx_filltrapezoid((NXWINDOW)hfwnd, &relclip, &reltrap, color);
 }

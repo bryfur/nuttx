@@ -71,6 +71,6 @@ int nxtk_toolbarbounds(NXTKWINDOW hfwnd, FAR struct nxgl_rect_s *bounds)
    */
 
   nxgl_rectoffset(bounds, &fwnd->tbrect,
-                  -fwnd->wnd.bounds.pt1.x, -fwnd->wnd.bounds.pt1.y);
+                  -fwnd->fwbase.x, -fwnd->fwbase.y);
   return OK;
 }

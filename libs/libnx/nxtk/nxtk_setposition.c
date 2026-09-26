@@ -68,7 +68,7 @@ int nxtk_setposition(NXTKWINDOW hfwnd, FAR const struct nxgl_point_s *pos)
    */
 
   nxgl_vectsubtract(&offset, pos, &fwnd->fwrect.pt1);
-  nxgl_vectoradd(&newpos, &offset, &fwnd->wnd.bounds.pt1);
+  nxgl_vectoradd(&newpos, &offset, &fwnd->fwbase);
 
   /* Then set that position */
 

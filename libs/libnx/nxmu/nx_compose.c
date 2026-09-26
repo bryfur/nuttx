@@ -136,7 +136,7 @@ int nx_setlut(NXHANDLE handle, int slot,
   struct nxsvrmsg_setlut_s msg;
 
   if (handle == NULL || lut == NULL || slot < NX_LUT_CLIENT0 ||
-      slot >= NX_BLEND_LUT_SLOTS)
+      slot >= NX_LUT_RING)
     {
       set_errno(EINVAL);
       return ERROR;

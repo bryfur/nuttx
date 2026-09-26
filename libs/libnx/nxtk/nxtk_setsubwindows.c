@@ -49,11 +49,12 @@
 
 void nxtk_setsubwindows(FAR struct nxtk_framedwindow_s *fwnd)
 {
+  struct nxgl_rect_s b   = fwnd->wnd.bounds;  /* Once: the server moves it */
   nxgl_coord_t fullheight;
   nxgl_coord_t bdrheight = 0;
-  nxgl_coord_t tbtop     = fwnd->wnd.bounds.pt1.y;
+  nxgl_coord_t tbtop     = b.pt1.y;
   nxgl_coord_t tbheight  = 0;
-  nxgl_coord_t fwtop     = fwnd->wnd.bounds.pt1.y;
+  nxgl_coord_t fwtop     = b.pt1.y;
   nxgl_coord_t fwheight  = 0;
   nxgl_coord_t fullwidth;
   nxgl_coord_t bdrwidth;
@@ -62,7 +63,7 @@ void nxtk_setsubwindows(FAR struct nxtk_framedwindow_s *fwnd)
 
   /* Divide up the vertical dimension of the window */
 
-  fullheight = fwnd->wnd.bounds.pt2.y - fwnd->wnd.bounds.pt1.y + 1;
+  fullheight = b.pt2.y - b.pt1.y + 1;
 
   /* Is it tall enough for a border? */
 
@@ -108,10 +109,10 @@ void nxtk_setsubwindows(FAR struct nxtk_framedwindow_s *fwnd)
 
   /* Divide up the horizontal dimensions of the window */
 
-  fullwidth = fwnd->wnd.bounds.pt2.x - fwnd->wnd.bounds.pt1.x + 1;
+  fullwidth = b.pt2.x - b.pt1.x + 1;
   bdrwidth  = ngl_min(2 * CONFIG_NXTK_BORDERWIDTH, fullwidth);
   fwwidth   = fullwidth - bdrwidth;
-  fwleft    = fwnd->wnd.bounds.pt1.x + bdrwidth / 2;
+  fwleft    = b.pt1.x + bdrwidth / 2;
 
   /* Realize the positions/dimensions */
 
@@ -124,4 +125,6 @@ void nxtk_setsubwindows(FAR struct nxtk_framedwindow_s *fwnd)
   fwnd->fwrect.pt1.y = fwtop;
   fwnd->fwrect.pt2.x = fwleft + fwwidth - 1;
   fwnd->fwrect.pt2.y = fwtop + fwheight - 1;
+
+  fwnd->fwbase = b.pt1;
 }

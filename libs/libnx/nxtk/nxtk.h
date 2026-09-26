@@ -56,6 +56,15 @@ struct nxtk_framedwindow_s
   /* Window data region and callbacks */
 
   struct nxgl_rect_s fwrect;
+
+  /* Where the frame was when tbrect and fwrect were worked out.  Drawing
+   * in the sub-windows is placed in the frame relative to this, never to
+   * wnd.bounds: in a flat build the server moves wnd.bounds itself, before
+   * the position report that updates the rectangles has reached us, and
+   * the two together would put drawing off by the move.
+   */
+
+  struct nxgl_point_s fwbase;
   FAR const struct nx_callback_s *fwcb;
   FAR void *fwarg;
 

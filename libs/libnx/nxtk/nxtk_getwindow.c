@@ -84,8 +84,8 @@ int nxtk_getwindow(NXTKWINDOW hfwnd, FAR const struct nxgl_rect_s *rect,
    */
 
   nxgl_rectoffset(&getrect, rect,
-                  fwnd->fwrect.pt1.x - fwnd->wnd.bounds.pt1.x,
-                  fwnd->fwrect.pt1.y - fwnd->wnd.bounds.pt1.y);
+                  fwnd->fwrect.pt1.x - fwnd->fwbase.x,
+                  fwnd->fwrect.pt1.y - fwnd->fwbase.y);
 
   /* Then get it */
 

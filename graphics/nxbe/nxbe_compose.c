@@ -213,6 +213,40 @@ static void lut_corner(uint8_t lut[NX_BLEND_LUT_N][NX_BLEND_LUT_N])
     }
 }
 
+/* The edge of the same disc, one pixel wide */
+
+static void lut_ring(uint8_t lut[NX_BLEND_LUT_N][NX_BLEND_LUT_N])
+{
+  const float r2 = (float)NXCOMP_R * NXCOMP_R;
+  const float q2 = (float)(NXCOMP_R - 1) * (NXCOMP_R - 1);
+  int dx;
+  int dy;
+  int i;
+  int j;
+
+  for (dy = 0; dy < NX_BLEND_LUT_N; dy++)
+    {
+      for (dx = 0; dx < NX_BLEND_LUT_N; dx++)
+        {
+          int n = 0;
+
+          for (j = 0; j < 8; j++)
+            {
+              for (i = 0; i < 8; i++)
+                {
+                  float u = lut_outside(-dx + (i + 0.5f) / 8.0f);
+                  float v = lut_outside(-dy + (j + 0.5f) / 8.0f);
+                  float d2 = u * u + v * v;
+
+                  n += d2 <= r2 && d2 > q2;
+                }
+            }
+
+          lut[dy][dx] = (uint8_t)((n * 255 + 32) / 64);
+        }
+    }
+}
+
 /* A soft shadow: the rounded rectangle blurred by a Gaussian (the signed
  * distance to its edge through the error function)
  */
@@ -607,6 +641,53 @@ static void comp_pixels(FAR struct nxbe_window_s *wnd,
     }
 }
 
+/* A window's 1-pixel light edge where it meets display rectangle c: its
+ * outer rows and columns and its corner squares, blended with the ring
+ */
+
+static void comp_border(FAR struct nxbe_window_s *wnd,
+                        FAR const struct nxgl_rect_s *c, nxgl_coord_t dy)
+{
+  FAR const struct nxgl_rect_s *w = &wnd->bounds;
+  struct nxgl_rect_s inner;
+  struct nxgl_rect_s part[8];
+  struct nx_blend_s b;
+  int i;
+
+  rect_set(&inner, w->pt1.x + NXCOMP_R, w->pt1.y + NXCOMP_R,
+           w->pt2.x - NXCOMP_R, w->pt2.y - NXCOMP_R);
+  rect_set(&part[0], w->pt1.x, w->pt1.y, w->pt2.x, w->pt1.y);
+  rect_set(&part[1], w->pt1.x, w->pt2.y, w->pt2.x, w->pt2.y);
+  rect_set(&part[2], w->pt1.x, w->pt1.y + 1, w->pt1.x, w->pt2.y - 1);
+  rect_set(&part[3], w->pt2.x, w->pt1.y + 1, w->pt2.x, w->pt2.y - 1);
+  rect_set(&part[4], w->pt1.x + 1, w->pt1.y + 1,
+           w->pt1.x + NXCOMP_R - 1, w->pt1.y + NXCOMP_R - 1);
+  rect_set(&part[5], w->pt2.x - NXCOMP_R + 1, w->pt1.y + 1,
+           w->pt2.x - 1, w->pt1.y + NXCOMP_R - 1);
+  rect_set(&part[6], w->pt1.x + 1, w->pt2.y - NXCOMP_R + 1,
+           w->pt1.x + NXCOMP_R - 1, w->pt2.y - 1);
+  rect_set(&part[7], w->pt2.x - NXCOMP_R + 1, w->pt2.y - NXCOMP_R + 1,
+           w->pt2.x - 1, w->pt2.y - 1);
+
+  for (i = 0; i < 8; i++)
+    {
+      nxgl_rectintersect(&part[i], &part[i], c);
+      if (rect_empty(&part[i]))
+        {
+          continue;
+        }
+
+      nxgl_rectoffset(&part[i], &part[i], 0, dy);
+      op_blend_init(&b, &part[i]);
+      b.colour = 0xffff;
+      b.alpha  = wnd->fx.border;
+      b.mode   = NX_BLEND_SRC_COLOUR | NX_BLEND_MOD_LUT;
+      b.slot   = NX_LUT_RING;
+      op_inner(&b, &inner, dy);
+      g_nxaccel->blend(&b);
+    }
+}
+
 /* One operation of a window's (window coordinates) at org on the device,
  * clipped to clip (device coordinates)
  */
@@ -763,6 +844,11 @@ static void comp_window(FAR struct nxbe_window_s *wnd,
       comp_pixels(wnd, &c, dy);
     }
 
+  if (wnd->fx.border > 0 && wnd_round(wnd))
+    {
+      comp_border(wnd, &c, dy);
+    }
+
   if (NXBE_ISLAYER(wnd) && wnd->ndlist > 0)
     {
       org.x = wnd->bounds.pt1.x;
@@ -876,6 +962,8 @@ void nxbe_compose_install(FAR struct nxbe_state_s *be)
   g_nxaccel->set_lut(NX_LUT_CORNER, g_comp.lut);
   lut_shadow(g_comp.lut);
   g_nxaccel->set_lut(NX_LUT_SHADOW, g_comp.lut);
+  lut_ring(g_comp.lut);
+  g_nxaccel->set_lut(NX_LUT_RING, g_comp.lut);
 
   g_comp.on = true;
   ginfo("Compositing, band at line %d\n", g_comp.bandy);
