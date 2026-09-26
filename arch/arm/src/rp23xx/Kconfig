@@ -24,6 +24,7 @@ if RP23XX_PSRAM
 
 choice
 	prompt "PSRAM heap usage"
+	default RP23XX_PSRAM_HEAP_USER if MM_KERNEL_HEAP
 	default RP23XX_PSRAM_HEAP_SINGLE
 	---help---
 		How the detected PSRAM is exposed to the memory manager.
@@ -41,7 +42,12 @@ config RP23XX_PSRAM_HEAP_USER
 	depends on MM_KERNEL_HEAP
 	---help---
 		Use the PSRAM as the (user) heap and the internal SRAM as the
-		kernel heap.
+		kernel heap.  With SMP: exclusive accesses go to the global
+		exclusive monitor, which covers the SRAM only, so kernel spinlocks
+		(spinlock_t) must stay in the SRAM (kernel memory); atomic
+		operations, and so semaphores and mutexes anywhere, use a hardware
+		spinlock instead (LIBC_ATOMIC_HWSPINLOCK).  ARM_STACKS_KERNEL_HEAP
+		keeps the stacks in the SRAM too.
 
 config RP23XX_PSRAM_HEAP_SEPARATE
 	bool "Separate PSRAM heap"
@@ -49,6 +55,12 @@ config RP23XX_PSRAM_HEAP_SEPARATE
 	---help---
 		Expose the PSRAM as a separate named heap ("psram") rather than
 		adding it to the main heap.
+
+config RP23XX_PSRAM_HEAP_NONE
+	bool "PSRAM in no heap"
+	---help---
+		Leave the PSRAM out of the memory manager: the board uses it
+		directly (rp23xx_psram_size() bytes at RP23XX_PSRAM_BASE).
 
 endchoice
 

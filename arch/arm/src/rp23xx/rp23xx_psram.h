@@ -72,6 +72,19 @@ size_t rp23xx_psramconfig(void);
 size_t rp23xx_psram_size(void);
 
 /****************************************************************************
+ * Name: rp23xx_psram_heap
+ *
+ * Description:
+ *   With CONFIG_RP23XX_PSRAM_HEAP_SEPARATE: the heap of the PSRAM, for
+ *   large buffers (mm_malloc() on it); NULL if there is no PSRAM.
+ *
+ ****************************************************************************/
+
+#ifdef CONFIG_RP23XX_PSRAM_HEAP_SEPARATE
+struct mm_heap_s *rp23xx_psram_heap(void);
+#endif
+
+/****************************************************************************
  * Name: rp23xx_psram_restore
  *
  * Description:

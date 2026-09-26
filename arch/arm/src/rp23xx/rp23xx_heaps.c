@@ -115,6 +115,13 @@ void up_extraheaps_init(void)
       g_psramheap = mm_initialize("psram", PSRAM_START, psram_size);
     }
 }
+
+/* The PSRAM heap, for large buffers that want it (NULL: no PSRAM) */
+
+struct mm_heap_s *rp23xx_psram_heap(void)
+{
+  return g_psramheap;
+}
 #endif
 
 #endif

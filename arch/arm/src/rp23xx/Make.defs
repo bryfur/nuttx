@@ -42,6 +42,10 @@ CHIP_CSRCS += rp23xx_smpcall.c
 CHIP_CSRCS += rp23xx_cpuidlestack.c
 endif
 
+ifeq ($(CONFIG_LIBC_ATOMIC_HWSPINLOCK),y)
+CHIP_CSRCS += rp23xx_hwspinlock.c
+endif
+
 ifeq ($(CONFIG_ARCH_HAVE_MULTICPU),y)
 CHIP_CSRCS += rp23xx_cpuindex.c
 endif

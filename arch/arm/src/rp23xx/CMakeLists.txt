@@ -39,6 +39,10 @@ if(CONFIG_SMP)
   list(APPEND SRCS rp23xx_cpustart.c rp23xx_smpcall.c rp23xx_cpuidlestack.c)
 endif()
 
+if(CONFIG_LIBC_ATOMIC_HWSPINLOCK)
+  list(APPEND SRCS rp23xx_hwspinlock.c)
+endif()
+
 if(CONFIG_ARCH_HAVE_MULTICPU)
   list(APPEND SRCS rp23xx_cpuindex.c)
 endif()
