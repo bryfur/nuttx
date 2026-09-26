@@ -388,6 +388,7 @@ config ARCH_CHIP_RP2040
 
 config ARCH_CHIP_RP23XX
 	bool "Raspberry Pi RP23XX"
+	select LIBC_ATOMIC_HWSPINLOCK if SMP
 	select ARCH_CORTEXM33
 	select ARCH_HAVE_RAMVECTORS
 	select ARCH_HAVE_MULTICPU
@@ -1053,6 +1054,16 @@ config ARCH_ARM1176JZ
 		Arm1176JZ(F)-S is the highest-performance single-core processor in
 		the Classic Arm family. It also introduced TrustZone technology to
 		enable secure execution outside of the reach of malicious code.
+
+config ARM_STACKS_KERNEL_HEAP
+	bool "All task stacks from the kernel heap"
+	default n
+	depends on MM_KERNEL_HEAP
+	---help---
+		Allocate the stacks of user tasks and pthreads from the kernel
+		heap too, not the user heap.  For a flat build whose kernel heap
+		is in fast internal memory and whose user heap (malloc) is in
+		slower external memory: stacks are the busiest memory there is.
 
 config ARCH_ARMV6M
 	bool

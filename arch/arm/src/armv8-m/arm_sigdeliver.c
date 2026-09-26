@@ -189,6 +189,12 @@ retry:
     }
 
   rtcb->xcp.regs = rtcb->xcp.saved_regs;
+
+  /* No trampoline frame any more: the next signal gets a new one (see
+   * arm_doirq())
+   */
+
+  rtcb->xcp.saved_regs = NULL;
   arm_fullcontextrestore();
   UNUSED(regs);
 }

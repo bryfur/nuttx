@@ -903,12 +903,20 @@ static void up_txint(struct uart_dev_s *dev, bool enable)
   struct up_dev_s *priv = (struct up_dev_s *)dev->priv;
   irqstate_t flags;
 
+  /* priv->ier is shared with up_rxint() and the other paths, which hold
+   * priv->lock: so must this (the critical section alone does not keep
+   * the other CPU's read-modify-write of priv->ier out).  The lock is not
+   * held across uart_xmitchars(), which comes back here to disable.
+   */
+
   flags = enter_critical_section();
   if (enable)
     {
 #ifndef CONFIG_SUPPRESS_SERIAL_INTS
+      spin_lock(&priv->lock);
       priv->ier |= RP23XX_UART_UARTICR_TXIC;
       up_serialout(priv, RP23XX_UART_UARTIMSC_OFFSET, priv->ier);
+      spin_unlock(&priv->lock);
 
       /* Fake a TX interrupt here by just calling uart_xmitchars() with
        * interrupts disabled (note this may recurse).
@@ -919,8 +927,10 @@ static void up_txint(struct uart_dev_s *dev, bool enable)
     }
   else
     {
+      spin_lock(&priv->lock);
       priv->ier &= ~RP23XX_UART_UARTICR_TXIC;
       up_serialout(priv, RP23XX_UART_UARTIMSC_OFFSET, priv->ier);
+      spin_unlock(&priv->lock);
     }
 
   leave_critical_section(flags);

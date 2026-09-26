@@ -70,6 +70,10 @@ const uintptr_t g_idle_topstack = IDLE_STACK;
 #  define showprogress(c)
 #endif
 
+#ifdef CONFIG_SMP
+void rp23xx_exclusives_global(void);
+#endif
+
 /****************************************************************************
  * Public Functions
  ****************************************************************************/
@@ -155,6 +159,12 @@ void __start(void)
     {
       putreg32(0, RP23XX_SIO_SPINLOCK(safe_spinlocks[i]));
     }
+
+#ifdef CONFIG_SMP
+  /* Exclusives atomic across both cores (rp23xx_cpustart.c) */
+
+  rp23xx_exclusives_global();
+#endif
 
   /* Initialize the FPU */
 

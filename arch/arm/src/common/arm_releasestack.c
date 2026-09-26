@@ -34,6 +34,14 @@
 
 #include "arm_internal.h"
 
+/* Every stack from the kernel heap (CONFIG_ARM_STACKS_KERNEL_HEAP) */
+
+#ifdef CONFIG_ARM_STACKS_KERNEL_HEAP
+#  define STACKS_KHEAP 1
+#else
+#  define STACKS_KHEAP 0
+#endif
+
 /****************************************************************************
  * Public Functions
  ****************************************************************************/
@@ -78,7 +86,8 @@ void up_release_stack(struct tcb_s *dtcb, uint8_t ttype)
 #ifdef CONFIG_MM_KERNEL_HEAP
       /* Use the kernel allocator if this is a kernel thread */
 
-      if (ttype == TCB_FLAG_TTYPE_KERNEL)
+      if (ttype == TCB_FLAG_TTYPE_KERNEL ||
+          STACKS_KHEAP)
         {
           kmm_free(dtcb->stack_alloc_ptr);
         }

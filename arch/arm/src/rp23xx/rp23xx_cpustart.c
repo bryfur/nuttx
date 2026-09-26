@@ -43,6 +43,7 @@
 #include "hardware/rp23xx_memorymap.h"
 #include "hardware/rp23xx_sio.h"
 #include "hardware/rp23xx_psm.h"
+#include "hardware/rp23xx_m33.h"
 
 #ifdef CONFIG_SMP
 
@@ -68,7 +69,28 @@
 
 static volatile bool g_core1_boot;
 
-extern int rp23xx_smp_call_handler(int irq, void *c, void *arg);
+extern int rp23xx_smp_bell_handler(int irq, void *c, void *arg);
+
+/****************************************************************************
+ * Name: rp23xx_exclusives_global
+ *
+ * Description:
+ *   Send exclusive accesses (LDREX / STREX: the kernel spinlocks) to the
+ *   global exclusive monitor, so that they are atomic between the two
+ *   cores; without this each core checks only its own local monitor.  The
+ *   global monitor covers the SRAM only: nothing may use exclusives on the
+ *   PSRAM.  Kernel spinlocks live in kernel memory (the SRAM); atomic
+ *   operations use a hardware spinlock (rp23xx_hwspinlock.c), so they
+ *   work on the PSRAM user heap too.
+ *   Called by each core as it starts.
+ *
+ ****************************************************************************/
+
+void rp23xx_exclusives_global(void)
+{
+  modifyreg32(NVIC_ACTLR, 0, RP23XX_M33_ACTLR_EXTEXCLALL_BITS);
+  __asm__ volatile ("dsb\n\tisb");
+}
 
 /****************************************************************************
  * Private Functions
@@ -144,6 +166,7 @@ static void core1_boot(void)
   arm_initialize_stack();
 #endif
 
+  rp23xx_exclusives_global();
   arm_fpuconfig();
 
   fifo_drain();
@@ -152,10 +175,11 @@ static void core1_boot(void)
 
   up_irqinitialize();
 
-  /* Enable inter-processor FIFO interrupt */
+  /* Enable the inter-processor doorbell interrupt */
 
-  irq_attach(RP23XX_SIO_IRQ_FIFO, rp23xx_smp_call_handler, NULL);
-  up_enable_irq(RP23XX_SIO_IRQ_FIFO);
+  putreg32(0xff, RP23XX_SIO_BASE + RP23XX_SIO_DOORBELL_IN_CLR_OFFSET);
+  irq_attach(RP23XX_SIO_IRQ_BELL, rp23xx_smp_bell_handler, NULL);
+  up_enable_irq(RP23XX_SIO_IRQ_BELL);
 
   g_core1_boot = true;
 
@@ -246,10 +270,11 @@ int up_cpu_start(int cpu)
 
   fifo_drain();
 
-  /* Enable inter-processor FIFO interrupt */
+  /* Enable the inter-processor doorbell interrupt */
 
-  irq_attach(RP23XX_SIO_IRQ_FIFO, rp23xx_smp_call_handler, NULL);
-  up_enable_irq(RP23XX_SIO_IRQ_FIFO);
+  putreg32(0xff, RP23XX_SIO_BASE + RP23XX_SIO_DOORBELL_IN_CLR_OFFSET);
+  irq_attach(RP23XX_SIO_IRQ_BELL, rp23xx_smp_bell_handler, NULL);
+  up_enable_irq(RP23XX_SIO_IRQ_BELL);
 
   while (!g_core1_boot);
 
