@@ -46,7 +46,7 @@ CSRCS += nxbe_accel.c
 endif
 
 ifeq ($(CONFIG_NX_COMPOSITOR),y)
-CSRCS += nxbe_compose.c
+CSRCS += nxbe_compose.c nxbe_compose_mem.c
 endif
 
 DEPPATH += --dep-path nxbe

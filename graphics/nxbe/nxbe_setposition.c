@@ -161,16 +161,14 @@ void nxbe_setposition(FAR struct nxbe_window_s *wnd,
   DEBUGASSERT(wnd != NULL && pos != NULL);
 
 #ifdef CONFIG_NX_COMPOSITOR
-  /* Composited: where it was and where it is are out of date */
+  /* Composited: the compositor copies the window, or composites where it
+   * was and where it is again
+   */
 
   if (nxbe_compose_on())
     {
-      nxbe_compose_damage_window(wnd);
-      nxgl_rectoffset(&wnd->bounds, &wnd->bounds,
-                      pos->x - wnd->bounds.pt1.x,
-                      pos->y - wnd->bounds.pt1.y);
+      nxbe_compose_setposition(wnd, pos);
       nxmu_reportposition(wnd);
-      nxbe_compose_damage_window(wnd);
       return;
     }
 #endif

@@ -155,6 +155,28 @@ struct nx_accel_s
 
   CODE void (*set_lut)(int slot,
                        FAR const uint8_t lut[NX_BLEND_LUT_N][NX_BLEND_LUT_N]);
+
+  /* Display modes, optional (NULL).  getmode() gives the size of mode n
+   * (0, 1, ...) and returns 0, or -EINVAL past the last; for n < 0 it
+   * gives the current mode's size and returns its number.  setmode()
+   * changes the mode from the next frame; what the display shows is
+   * undefined until it is redrawn.  The display is the rectangle of the
+   * current mode's size at (0, 0), which surface_alloc() never hands out
+   * (at the new size once setmode() has returned: it may then overlap
+   * surfaces, which the server moves).
+   */
+
+  CODE int  (*getmode)(int mode, FAR struct nxgl_size_s *size);
+  CODE int  (*setmode)(int mode);
+
+  /* Double buffering, optional (NULL): from the next frame, scan the
+   * display out from the rectangle of its size at origin (the display at
+   * (0, 0), or a surface; origin->x even).  Later operations may draw into
+   * what was shown before: the hardware holds them until that frame has
+   * started, so flip once a frame, at its end.
+   */
+
+  CODE void (*flip)(FAR const struct nxgl_point_s *origin);
 };
 
 /****************************************************************************

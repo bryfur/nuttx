@@ -114,6 +114,29 @@ void nxmu_mouseinit(int x, int y)
 }
 
 /****************************************************************************
+ * Name: nxmu_mouserange
+ *
+ * Description:
+ *   The display has a new size (a display mode): the pointer stays on it
+ *
+ ****************************************************************************/
+
+void nxmu_mouserange(int x, int y)
+{
+  g_mrange.x = x;
+  g_mrange.y = y;
+  if (g_mpos.x >= x)
+    {
+      g_mpos.x = x - 1;
+    }
+
+  if (g_mpos.y >= y)
+    {
+      g_mpos.y = y - 1;
+    }
+}
+
+/****************************************************************************
  * Name: nxmu_mousereport
  *
  * Description:

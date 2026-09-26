@@ -300,6 +300,23 @@ int nxbe_configure(FAR NX_DRIVERTYPE *dev, FAR struct nxbe_state_s *be)
 #endif
     }
 
+#ifdef CONFIG_NX_ACCEL
+  /* With display modes, the display is the size of the hardware's mode,
+   * whatever the framebuffer says (it may be sized for the largest)
+   */
+
+  if (g_nxaccel != NULL && g_nxaccel->getmode != NULL)
+    {
+      struct nxgl_size_s size;
+
+      if (g_nxaccel->getmode(-1, &size) >= 0)
+        {
+          be->vinfo.xres = size.w;
+          be->vinfo.yres = size.h;
+        }
+    }
+#endif
+
 #ifdef CONFIG_NX_COMPOSITOR
   /* And composite the display, if the hardware blends */
 

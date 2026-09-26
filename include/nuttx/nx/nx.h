@@ -92,6 +92,7 @@ enum nx_event_e
 {
   NXEVENT_BLOCKED = 0,   /* Window messages are blocked */
   NXEVENT_SYNCHED,       /* Synchronization handshake */
+  NXEVENT_DISPLAYMODE,   /* The display mode has changed (arg: its number) */
 };
 
 /* These define callbacks that must be provided to nx_openwindow.  These

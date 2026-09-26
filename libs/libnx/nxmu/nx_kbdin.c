@@ -26,7 +26,9 @@
 
 #include <nuttx/config.h>
 
+#include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 #include <errno.h>
 
 #include <nuttx/nx/nx.h>
@@ -53,36 +55,32 @@
 int nx_kbdin(NXHANDLE handle, uint8_t nch, FAR const uint8_t *ch)
 {
   FAR struct nxmu_conn_s *conn = (FAR struct nxmu_conn_s *)handle;
-  FAR struct nxsvrmsg_kbdin_s *outmsg;
-  int size;
-  int ret;
-  int i;
+  union
+  {
+    struct nxsvrmsg_kbdin_s msg;
+    uint8_t buf[NX_MXSVRMSGLEN];
+  } out;
 
-  /* Allocate a bigger message to account for the variable amount of
-   * character data.
+  int ret = OK;
+  int n;
+
+  /* As many messages as it takes: each must fit the server's queue, and
+   * the one the server sends on must fit the client's
    */
 
-  size = sizeof(struct nxsvrmsg_kbdin_s) + nch - 1;
-  outmsg = (FAR struct nxsvrmsg_kbdin_s *)lib_malloc(size);
-  if (!outmsg)
+  while (nch > 0 && ret >= 0)
     {
-      set_errno(ENOMEM);
-      return ERROR;
+      n = nch < NX_KBDIN_MAXCH ? nch : NX_KBDIN_MAXCH;
+      out.msg.msgid = NX_SVRMSG_KBDIN;
+      out.msg.nch   = n;
+      memcpy(out.msg.ch, ch, n);
+
+      ret  = nxmu_sendserver(conn, &out.msg,
+                             offsetof(struct nxsvrmsg_kbdin_s, ch) + n);
+      ch  += n;
+      nch -= n;
     }
 
-  /* Inform the server of the new keypad data */
-
-  outmsg->msgid = NX_SVRMSG_KBDIN;
-  outmsg->nch   = nch;
-
-  for (i = 0; i < nch; i++)
-    {
-      outmsg->ch[i] = ch[i];
-    }
-
-  ret = nxmu_sendserver(conn, outmsg, size);
-
-  lib_free(outmsg);
   return ret;
 }
 

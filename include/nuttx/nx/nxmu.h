@@ -29,6 +29,7 @@
 
 #include <nuttx/config.h>
 
+#include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
 #include <mqueue.h>
@@ -60,6 +61,16 @@
 #define NX_MXSVRMSGLEN       (64) /* Maximum size of a client->server command */
 #define NX_MXEVENTLEN        (64) /* Maximum size of an event */
 #define NX_MXCLIMSGLEN       (64) /* Maximum size of a server->client message */
+
+/* The most characters one keyboard message carries, to the server and
+ * from it to the window's client (nx_kbdin() sends more in several)
+ */
+
+#define NX_KBDIN_MAXCH \
+  (NX_MXCLIMSGLEN - (int)offsetof(struct nxclimsg_kbdin_s, ch) < \
+   NX_MXSVRMSGLEN - (int)offsetof(struct nxsvrmsg_kbdin_s, ch) ? \
+   NX_MXCLIMSGLEN - (int)offsetof(struct nxclimsg_kbdin_s, ch) : \
+   NX_MXSVRMSGLEN - (int)offsetof(struct nxsvrmsg_kbdin_s, ch))
 
 /* Message priorities -- they must all be at the same priority to assure
  * FIFO execution.
@@ -161,7 +172,8 @@ enum nxmsg_e
   NX_SVRMSG_SETEFFECTS,       /* Window effects and layer */
   NX_SVRMSG_SETDLIST,         /* A layer window's display list */
   NX_SVRMSG_GPUOPS,           /* Operations of the display hardware */
-  NX_SVRMSG_SETLUT            /* Load a shape table */
+  NX_SVRMSG_SETLUT,           /* Load a shape table */
+  NX_SVRMSG_DISPLAYMODE       /* Get or set the display mode */
 };
 
 /* Server-to-Client Message Structures **************************************/
@@ -574,6 +586,16 @@ struct nxsvrmsg_setlut_s
   uint32_t msgid;                  /* NX_SVRMSG_SETLUT */
   int slot;
   FAR const uint8_t *lut;          /* NX_BLEND_LUT_N x NX_BLEND_LUT_N */
+  FAR sem_t *sem_done;
+};
+
+struct nxsvrmsg_displaymode_s
+{
+  uint32_t msgid;                  /* NX_SVRMSG_DISPLAYMODE */
+  int mode;                        /* Which (< 0: the current one) */
+  bool set;                        /* Change to it */
+  FAR int *result;                 /* Its number, or a negated errno */
+  FAR struct nxgl_size_s *size;    /* Its size */
   FAR sem_t *sem_done;
 };
 #endif

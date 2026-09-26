@@ -248,6 +248,7 @@ void nxmu_redraw(FAR struct nxbe_window_s *wnd,
 
 #ifdef CONFIG_NX_XYINPUT
 void nxmu_mouseinit(int x, int y);
+void nxmu_mouserange(int x, int y);
 #endif
 
 /****************************************************************************

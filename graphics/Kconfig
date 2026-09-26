@@ -159,8 +159,9 @@ config NX_COMPOSITOR
 	---help---
 		With display hardware that blends (nx_accel_s blend) and has
 		surfaces, every window is kept in a surface and the server
-		composites the display from them, bottom to top, into an
-		off-screen band that is then moved to the screen: windows can
+		composites the display from them, bottom to top, into a second
+		display buffer that the hardware then flips to (with nx_accel_s
+		flip, and room for it; else in place): windows can
 		have round corners, soft shadows, a translucent tinted backdrop
 		and an opacity (nx_seteffects()), windows can be layers drawn
 		from a list of operations instead of pixels (nx_setdisplaylist()),
@@ -170,12 +171,13 @@ config NX_COMPOSITOR
 
 if NX_COMPOSITOR
 
-config NX_COMPOSITOR_BANDH
-	int "Composition band height"
-	default 256
+config NX_COMPOSITOR_FRAMEMS
+	int "Frame period (ms)"
+	default 16
 	---help---
-		Lines of off-screen surface the display is composited in: a
-		damaged area taller than this is composited in bands.
+		Double buffered, a frame is composited and flipped to at most
+		this often: the hardware holds what follows a flip until the
+		next frame starts, so flipping faster only makes it wait.
 
 config NX_COMPOSITOR_MAXDAMAGE
 	int "Damaged rectangles held"

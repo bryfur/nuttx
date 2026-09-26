@@ -1,0 +1,412 @@
+/****************************************************************************
+ * graphics/nxbe/nxbe_compose_mem.c
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.  The
+ * ASF licenses this file to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance with the
+ * License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the
+ * License for the specific language governing permissions and limitations
+ * under the License.
+ *
+ ****************************************************************************/
+
+/* Windows in memory, composited (CONFIG_NX_COMPOSITOR).
+ *
+ * A RAM-backed window that found no room for a surface in the display
+ * hardware keeps its pixels in memory.  The operations clients draw with
+ * (nx_gpuops()) are then done here, in software, with the arithmetic of
+ * the hardware's BLEND (nxaccel.h): a source image in a surface is read
+ * back (nx_accel_s get), the shape tables are the copies kept here of what
+ * was loaded (nxbe_compose_setlut()).  Slow, but the window looks as it
+ * would in a surface (RGB565 only).  The compositor shows it from memory.
+ */
+
+/****************************************************************************
+ * Included Files
+ ****************************************************************************/
+
+#include <nuttx/config.h>
+
+#include <stdint.h>
+#include <string.h>
+#include <sys/param.h>
+#include <debug.h>
+
+#include <nuttx/kmalloc.h>
+#include <nuttx/nx/nxaccel.h>
+#include <nuttx/nx/nxcompose.h>
+
+#include "nxbe.h"
+
+#ifdef CONFIG_NX_COMPOSITOR
+
+/****************************************************************************
+ * Pre-processor Definitions
+ ****************************************************************************/
+
+#define MEM_LUTSIZE   (NX_BLEND_LUT_SLOTS * NX_BLEND_LUT_N * NX_BLEND_LUT_N)
+#define MEM_MAXSRC    (64 * 1024)          /* Source pixels read at once */
+
+/****************************************************************************
+ * Private Data
+ ****************************************************************************/
+
+/* The shape tables as loaded ([slot][ddy][ddx]); NULL: no memory (every
+ * entry is then taken as 255, as the hardware has them until loaded)
+ */
+
+static FAR uint8_t *g_luts;
+
+static const uint8_t g_bayer[4][4] =
+{
+  { 0, 8, 2, 10 }, { 12, 4, 14, 6 }, { 3, 11, 1, 9 }, { 15, 7, 13, 5 }
+};
+
+/****************************************************************************
+ * Private Functions
+ ****************************************************************************/
+
+static inline uint32_t mul8(uint32_t p, uint32_t q)
+{
+  return (p * q + 255) >> 8;
+}
+
+static inline uint32_t dist(int32_t v, int32_t lo, int32_t hi, int shift)
+{
+  int32_t d = v < lo ? lo - v : v > hi ? v - hi : 0;
+
+  d >>= shift;
+  return d > NX_BLEND_LUT_N - 1 ? NX_BLEND_LUT_N - 1 : d;
+}
+
+static uint16_t blend_px(uint16_t s, uint16_t d, uint32_t a, uint32_t bias)
+{
+  uint32_t ap = a + (a >> 7);
+  uint32_t r = ((s >> 11) * ap + (d >> 11) * (256 - ap) + bias) >> 8;
+  uint32_t g = (((s >> 5) & 63) * ap + ((d >> 5) & 63) * (256 - ap) +
+                bias) >> 8;
+  uint32_t b = ((s & 31) * ap + (d & 31) * (256 - ap) + bias) >> 8;
+
+  return (uint16_t)(r << 11 | g << 5 | b);
+}
+
+static inline FAR uint16_t *mem_pixel(FAR struct nxbe_window_s *wnd,
+                                      int x, int y)
+{
+  return (FAR uint16_t *)((FAR uint8_t *)wnd->fbmem + y * wnd->stride) + x;
+}
+
+/* A w x h source image at (sx, sy) of window src (its own coordinates):
+ * from its surface (read back) or its memory; outside it, zero.  The
+ * caller frees it.
+ */
+
+static FAR uint16_t *mem_source(FAR struct nxbe_window_s *src, int sx,
+                                int sy, int w, int h)
+{
+  FAR uint16_t *buf;
+  struct nxgl_rect_s r;
+  struct nxgl_rect_s b;
+  int y;
+
+  buf = kumm_zalloc((size_t)w * h * 2);
+  if (buf == NULL)
+    {
+      return NULL;
+    }
+
+  r.pt1.x = sx;
+  r.pt1.y = sy;
+  r.pt2.x = sx + w - 1;
+  r.pt2.y = sy + h - 1;
+  b.pt1.x = 0;
+  b.pt1.y = 0;
+  b.pt2.x = src->bounds.pt2.x - src->bounds.pt1.x;
+  b.pt2.y = src->bounds.pt2.y - src->bounds.pt1.y;
+  nxgl_rectintersect(&r, &r, &b);
+  if (r.pt1.x > r.pt2.x || r.pt1.y > r.pt2.y)
+    {
+      return buf;
+    }
+
+  if (src->surface)
+    {
+      FAR uint16_t *dest = buf + (r.pt1.y - sy) * w + (r.pt1.x - sx);
+
+      nxgl_rectoffset(&r, &r, src->surfpos.x, src->surfpos.y);
+      if (g_nxaccel->get != NULL)
+        {
+          g_nxaccel->get(&r, dest, w * 2);
+        }
+    }
+  else if (src->fbmem != NULL)
+    {
+      for (y = r.pt1.y; y <= r.pt2.y; y++)
+        {
+          memcpy(buf + (y - sy) * w + (r.pt1.x - sx),
+                 mem_pixel(src, r.pt1.x, y), (r.pt2.x - r.pt1.x + 1) * 2);
+        }
+    }
+
+  return buf;
+}
+
+/* One operation, window coordinates, into the window's memory; the part
+ * of the window it drew in *dirty (window coordinates)
+ */
+
+static void mem_gpuop(FAR struct nxbe_window_s *wnd,
+                      FAR const struct nx_gpuop_s *op,
+                      FAR struct nxgl_rect_s *dirty)
+{
+  FAR struct nxbe_window_s *src;
+  FAR uint16_t *img = NULL;
+  struct nxgl_rect_s whole;
+  struct nxgl_rect_s bounds;
+  struct nxgl_rect_s d;
+  uint8_t smode = op->mode & NX_BLEND_SRC_MASK;
+  uint8_t mmode = op->mode & NX_BLEND_MOD_MASK;
+  bool image = op->op == NX_GPUOP_COPY ||
+               (op->op == NX_GPUOP_BLEND && smode != NX_BLEND_SRC_COLOUR);
+  int w;
+  int h;
+  int x;
+  int y;
+
+  if (op->w <= 0 || op->h <= 0)
+    {
+      return;
+    }
+
+  whole.pt1.x  = op->x;
+  whole.pt1.y  = op->y;
+  whole.pt2.x  = op->x + op->w - 1;
+  whole.pt2.y  = op->y + op->h - 1;
+  bounds.pt1.x = 0;
+  bounds.pt1.y = 0;
+  bounds.pt2.x = wnd->bounds.pt2.x - wnd->bounds.pt1.x;
+  bounds.pt2.y = wnd->bounds.pt2.y - wnd->bounds.pt1.y;
+  nxgl_rectintersect(&d, &whole, &bounds);
+  if (d.pt1.x > d.pt2.x || d.pt1.y > d.pt2.y)
+    {
+      return;
+    }
+
+  w = d.pt2.x - d.pt1.x + 1;
+  h = d.pt2.y - d.pt1.y + 1;
+  nxgl_rectunion(dirty, dirty, &d);
+
+  if (op->op == NX_GPUOP_FILL)
+    {
+      for (y = d.pt1.y; y <= d.pt2.y; y++)
+        {
+          FAR uint16_t *p = mem_pixel(wnd, d.pt1.x, y);
+
+          for (x = 0; x < w; x++)
+            {
+              p[x] = (uint16_t)op->colour;
+            }
+        }
+
+      return;
+    }
+
+  /* All of the source is read before anything is written (the source may
+   * be the window itself), in bands of rows if it is large
+   */
+
+  if (image)
+    {
+      int rows = MAX(1, MIN(h, MEM_MAXSRC / w));
+      struct nx_gpuop_s band = *op;
+
+      if (rows < h)
+        {
+          for (y = 0; y < h; y += rows)
+            {
+              band.x  = d.pt1.x;
+              band.y  = d.pt1.y + y;
+              band.w  = w;
+              band.h  = MIN(rows, h - y);
+              band.sx = op->sx + d.pt1.x - whole.pt1.x;
+              band.sy = op->sy + d.pt1.y + y - whole.pt1.y;
+              mem_gpuop(wnd, &band, dirty);
+            }
+
+          return;
+        }
+
+      src = op->src != NULL ? (FAR struct nxbe_window_s *)op->src : wnd;
+      img = mem_source(src, op->sx + d.pt1.x - whole.pt1.x,
+                       op->sy + d.pt1.y - whole.pt1.y, w, h);
+      if (img == NULL)
+        {
+          return;
+        }
+    }
+
+  for (y = d.pt1.y; y <= d.pt2.y; y++)
+    {
+      FAR uint16_t *p = mem_pixel(wnd, d.pt1.x, y);
+      FAR const uint16_t *s = img != NULL ? img + (y - d.pt1.y) * w : NULL;
+
+      for (x = d.pt1.x; x <= d.pt2.x; x++, p++)
+        {
+          uint16_t sp = s != NULL ? s[x - d.pt1.x] : 0;
+          uint16_t spix;
+          uint32_t f;
+          uint32_t m;
+          uint32_t bias;
+          int32_t v;
+
+          if (op->op == NX_GPUOP_COPY)
+            {
+              *p = sp;
+              continue;
+            }
+
+          switch (smode)
+            {
+              case NX_BLEND_SRC_COLOUR:
+                spix = (uint16_t)op->colour;
+                f    = 255;
+                break;
+
+              case NX_BLEND_SRC_RGB:
+                spix = sp;
+                f    = 255;
+                break;
+
+              case NX_BLEND_SRC_ARGB4444:
+                {
+                  uint32_t r = (sp >> 8) & 15;
+                  uint32_t g = (sp >> 4) & 15;
+                  uint32_t b = sp & 15;
+
+                  spix = (uint16_t)((r << 1 | r >> 3) << 11 |
+                                    (g << 2 | g >> 2) << 5 |
+                                    (b << 1 | b >> 3));
+                  f    = (sp >> 12) * 17u;
+                }
+                break;
+
+              default:
+                spix = (uint16_t)op->colour;
+                f    = sp & 0xff;
+                break;
+            }
+
+          if ((op->mode & NX_BLEND_KEY) != 0 && image && sp == op->key)
+            {
+              f = 0;
+            }
+
+          switch (mmode)
+            {
+              case NX_BLEND_MOD_LUT:
+                m = g_luts == NULL ? 255 :
+                    g_luts[((op->slot & 7) * NX_BLEND_LUT_N +
+                            dist(y, op->p[1], op->p[3], op->shift & 3)) *
+                           NX_BLEND_LUT_N +
+                           dist(x, op->p[0], op->p[2], op->shift & 3)];
+                break;
+
+              case NX_BLEND_MOD_HRAMP:
+              case NX_BLEND_MOD_VRAMP:
+                v = (int32_t)(uint16_t)op->p[2] +
+                    ((mmode == NX_BLEND_MOD_HRAMP ? x : y) - op->p[0]) *
+                    op->p[1];
+                v >>= 8;
+                m = v < 0 ? 0 : v > 255 ? 255 : (uint32_t)v;
+                break;
+
+              default:
+                m = 255;
+                break;
+            }
+
+          bias = (op->mode & NX_BLEND_DITHER) != 0 ?
+                 g_bayer[y & 3][x & 3] * 16u + 8 : 128;
+          *p = blend_px(spix, *p, mul8(mul8(op->alpha, f), m), bias);
+        }
+    }
+
+  kumm_free(img);
+}
+
+/****************************************************************************
+ * Public Functions
+ ****************************************************************************/
+
+/****************************************************************************
+ * Name: nxbe_compose_setlut
+ *
+ * Description:
+ *   Load a shape table into the hardware, and keep a copy for windows in
+ *   memory.
+ *
+ ****************************************************************************/
+
+void nxbe_compose_setlut(int slot,
+                         FAR const uint8_t lut[NX_BLEND_LUT_N][NX_BLEND_LUT_N])
+{
+  if (g_luts == NULL)
+    {
+      g_luts = kumm_malloc(MEM_LUTSIZE);
+      if (g_luts != NULL)
+        {
+          memset(g_luts, 255, MEM_LUTSIZE);
+        }
+    }
+
+  if (g_luts != NULL && slot >= 0 && slot < NX_BLEND_LUT_SLOTS)
+    {
+      memcpy(g_luts + slot * NX_BLEND_LUT_N * NX_BLEND_LUT_N, lut,
+             NX_BLEND_LUT_N * NX_BLEND_LUT_N);
+    }
+
+  g_nxaccel->set_lut(slot, lut);
+}
+
+/****************************************************************************
+ * Name: nxbe_compose_memops
+ *
+ * Description:
+ *   Operations into a window in memory (window coordinates); what they
+ *   drew is returned in *dirty (window coordinates, empty if nothing).
+ *
+ ****************************************************************************/
+
+void nxbe_compose_memops(FAR struct nxbe_window_s *wnd,
+                         FAR const struct nx_gpuop_s *ops, int nops,
+                         FAR struct nxgl_rect_s *dirty)
+{
+  int i;
+
+  dirty->pt1.x = INT16_MAX;
+  dirty->pt1.y = INT16_MAX;
+  dirty->pt2.x = INT16_MIN;
+  dirty->pt2.y = INT16_MIN;
+
+  if (wnd->fbmem == NULL || wnd->be->plane[0].pinfo.bpp != 16)
+    {
+      return;
+    }
+
+  for (i = 0; i < nops; i++)
+    {
+      mem_gpuop(wnd, &ops[i], dirty);
+    }
+}
+
+#endif /* CONFIG_NX_COMPOSITOR */

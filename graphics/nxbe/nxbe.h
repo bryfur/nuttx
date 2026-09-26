@@ -335,13 +335,20 @@ void nxbe_accel_flush(void);
 
 /* RAM-backed windows kept in surfaces of the display hardware instead of
  * memory (nx_accel_s surface_alloc): made, remade at a new size (false:
- * no room, the surface is gone), freed, and shown (dest in window
- * coordinates, clipped by the windows above).
+ * no room, the surface is gone; *lost: it is, but not what it had),
+ * moved elsewhere (false: no room, gone), all moved out of a rectangle
+ * (the display, grown), given up for memory, freed, and shown (dest in
+ * window coordinates, clipped by the windows above).  When there is no
+ * room for one, the compositor's second display buffer is given up, then
+ * the surfaces are packed together, before a window goes to memory.
  */
 
 #ifdef CONFIG_NX_RAMBACKED
 bool nxbe_surface_open(FAR struct nxbe_window_s *wnd);
-bool nxbe_surface_resize(FAR struct nxbe_window_s *wnd);
+bool nxbe_surface_resize(FAR struct nxbe_window_s *wnd, FAR bool *lost);
+bool nxbe_surface_relocate(FAR struct nxbe_window_s *wnd);
+void nxbe_surface_evacuate(FAR const struct nxgl_rect_s *keep);
+void nxbe_surface_tomemory(FAR struct nxbe_window_s *wnd);
 void nxbe_surface_close(FAR struct nxbe_window_s *wnd);
 void nxbe_surface_present(FAR struct nxbe_window_s *wnd,
                           FAR const struct nxgl_rect_s *dest);
@@ -353,8 +360,14 @@ void nxbe_surface_present(FAR struct nxbe_window_s *wnd,
  * the windows' surfaces.  Changes only record damage (display
  * coordinates; _wrect: window coordinates; _window: all the window
  * touches), composited by nxbe_compose_run() when the server is idle or
- * nxbe_compose_due().  nxbe_compose_on() is false if the hardware cannot
- * blend: NX then draws as without the compositor.
+ * nxbe_compose_due(), and nxbe_compose_wait() says it may (a frame at a
+ * time).  nxbe_compose_on() is false if the hardware cannot blend: NX then
+ * draws as without the compositor.  A surface that does not fit may take
+ * the compositor's second display buffer (nxbe_compose_reclaim()); freed
+ * surfaces let it try for one again (nxbe_compose_freed()).  A window
+ * that got no surface is drawn in memory, in software
+ * (nxbe_compose_memops(), nxbe_compose_mem.c, with copies of the shape
+ * tables loaded through nxbe_compose_setlut()).
  ****************************************************************************/
 
 #ifdef CONFIG_NX_COMPOSITOR
@@ -364,7 +377,9 @@ void nxbe_compose_damage(FAR const struct nxgl_rect_s *rect);
 void nxbe_compose_damage_wrect(FAR struct nxbe_window_s *wnd,
                                FAR const struct nxgl_rect_s *rel);
 void nxbe_compose_damage_window(FAR struct nxbe_window_s *wnd);
-void nxbe_compose_restack(FAR struct nxbe_window_s *wnd, bool top);
+void nxbe_compose_setposition(FAR struct nxbe_window_s *wnd,
+                              FAR const struct nxgl_point_s *pos);
+bool nxbe_compose_restack(FAR struct nxbe_window_s *wnd, bool top);
 void nxbe_compose_open(FAR struct nxbe_window_s *wnd);
 void nxbe_compose_close(FAR struct nxbe_window_s *wnd);
 void nxbe_compose_seteffects(FAR struct nxbe_window_s *wnd,
@@ -374,7 +389,16 @@ void nxbe_compose_setdlist(FAR struct nxbe_window_s *wnd,
 void nxbe_compose_gpuops(FAR struct nxbe_window_s *wnd,
                          FAR const struct nx_gpuop_s *ops, int nops);
 bool nxbe_compose_due(void);
+int  nxbe_compose_wait(void);
 void nxbe_compose_run(void);
+bool nxbe_compose_reclaim(void);
+void nxbe_compose_freed(void);
+void nxbe_compose_setmode(bool begin);
+void nxbe_compose_setlut(int slot,
+                         FAR const uint8_t lut[NX_BLEND_LUT_N][NX_BLEND_LUT_N]);
+void nxbe_compose_memops(FAR struct nxbe_window_s *wnd,
+                         FAR const struct nx_gpuop_s *ops, int nops,
+                         FAR struct nxgl_rect_s *dirty);
 #endif
 
 /****************************************************************************

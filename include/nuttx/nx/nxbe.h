@@ -190,6 +190,7 @@ struct nxbe_window_s
   bool surface;                       /* The pixels are in the surface */
   struct nxgl_point_s surfpos;        /* Where the surface is */
   struct nxgl_size_s surfsize;        /* Its size (the window's, when made) */
+  FAR struct nxbe_window_s *surfnext; /* The server's list of them */
 #endif
 #endif
 

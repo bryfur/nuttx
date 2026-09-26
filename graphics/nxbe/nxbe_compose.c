@@ -26,25 +26,38 @@
  * drawn into, moved, raised, opened, closed, given effects) only records
  * the rectangle of the display that is now out of date: the damage.  When
  * the server has no more messages waiting (or damage has waited
- * NXCOMP_LATENCY), each damaged rectangle is composited: in bands of up to
- * CONFIG_NX_COMPOSITOR_BANDH lines, in an off-screen surface of that
- * height (the band), from the lowest window that matters to the top one:
+ * NXCOMP_LATENCY), and at most once a frame (NXCOMP_FRAME), a frame is
+ * composited into the back buffer and flipped to:
  *
- *   - the background: its colour;
- *   - a window's shadow: black, blended with the shape table NX_LUT_SHADOW
- *     around the window's rounded rectangle (only where the window does
- *     not cover it);
- *   - its backdrop: a tint blended behind it (translucent panels);
- *   - its pixels: copied from its surface, the round corners (and the
- *     whole window, if it has an opacity or a colour key) blended with the
- *     shape table NX_LUT_CORNER;
- *   - or, for a layer window, its display list, replayed;
+ *   - the back buffer is brought up to date first: it is the frame before
+ *     last, so what the last frame changed (its buffer age) is copied over
+ *     from the front buffer, except where this frame redraws anyway;
+ *   - a window that was moved and is opaque is copied as it was
+ *     composited, from where it was in the front buffer to where it is in
+ *     the back: one copy instead of drawing it and all that is below it
+ *     again; only its round corners, what it uncovered and its shadow's
+ *     margins become damage;
+ *   - each damaged rectangle is composited from the lowest window that
+ *     matters to the top one:
+ *       - the background: its colour;
+ *       - a window's shadow: black, blended with the shape table
+ *         NX_LUT_SHADOW around the window's rounded rectangle (only where
+ *         the window does not cover it);
+ *       - its backdrop: a tint blended behind it (translucent panels);
+ *       - its pixels: copied from its surface, the round corners (and the
+ *         whole window, if it has an opacity or a colour key) blended with
+ *         the shape table NX_LUT_CORNER;
+ *       - or, for a layer window, its display list, replayed;
+ *     the lowest window that matters is the top one that covers the
+ *     rectangle with opaque pixels: typing in a terminal on top costs one
+ *     copy from its surface (and one more of the last frame's change);
+ *   - the back buffer is flipped to (nx_accel_s flip): the hardware shows
+ *     it from the next frame, so no partial state is ever seen.
  *
- * and the band is then moved to the display in one piece, so no partial
- * state is ever seen.  The lowest window that matters is the top one that
- * covers the band with opaque pixels; if nothing above it touches the
- * band, its pixels go straight to the display with no band at all (typing
- * in a terminal on top costs one copy, as without the compositor).
+ * The two display buffers are the display at (0, 0) and a surface of the
+ * current mode's size.  When a window's surface does not fit, the second
+ * buffer is given up (nxbe_compose_reclaim()) and the display composited
+ * in place, until there is room again.  Without flip() it is always so.
  *
  * Everything is the display hardware's operations (nx_accel_s): the
  * server only computes rectangles.
@@ -78,22 +91,57 @@
 #define NXCOMP_LUTMAX     (NX_BLEND_LUT_N - 1)
 #define NXCOMP_SIGMA      6.0f    /* The shadow's blur */
 #define NXCOMP_LATENCY    MSEC2TICK(20)
+#define NXCOMP_FRAME      MSEC2TICK(CONFIG_NX_COMPOSITOR_FRAMEMS)
 #define NXCOMP_MAXDAMAGE  CONFIG_NX_COMPOSITOR_MAXDAMAGE
-#define NXCOMP_BANDH      CONFIG_NX_COMPOSITOR_BANDH
+#define NXCOMP_MAXMOVES   4
+#define NXCOMP_MAXPREV    (NXCOMP_MAXDAMAGE + NXCOMP_MAXMOVES)
+#define NXCOMP_MAXPIECES  32      /* Buffer age: pieces of one rectangle */
+#define NXCOMP_MAXADD     64      /* Damage from moves, in one frame */
+#define NXCOMP_STAGEH     16      /* Staging: lines of a window in memory */
 
 /****************************************************************************
  * Private Types
  ****************************************************************************/
 
+/* A window moved since the last frame, and where it was then */
+
+struct nxcomp_move_s
+{
+  FAR struct nxbe_window_s *wnd;
+  struct nxgl_rect_s from;
+};
+
+/* A copy of composited pixels from the front buffer to the back one
+ * (display coordinates)
+ */
+
+struct nxcomp_copy_s
+{
+  struct nxgl_rect_s src;
+  struct nxgl_rect_s dest;
+};
+
 struct nxcomp_s
 {
   FAR struct nxbe_state_s *be;
   bool on;                                /* Compositing */
-  nxgl_coord_t bandy;                     /* The band: lines bandy.. */
-  nxgl_coord_t bandh;
-  int ndamage;
+  bool dbuf;                              /* Two display buffers */
+  bool retry;                             /* Surfaces freed: try for two */
+  uint8_t front;                          /* buf[front] is shown */
+  struct nxgl_point_s buf[2];             /* buf[0]: the display, (0, 0);
+                                           * buf[1]: a surface */
+  struct nxgl_size_s bufsize;             /* buf[1]'s size */
+  bool stage;                             /* stagepos: staging surface */
+  struct nxgl_point_s stagepos;
+  struct nxgl_size_s stagesize;
   clock_t since;                          /* When the oldest damage came */
+  clock_t lastflip;
+  int ndamage;
+  int nprev;
+  int nmoves;
   struct nxgl_rect_s damage[NXCOMP_MAXDAMAGE];
+  struct nxgl_rect_s prev[NXCOMP_MAXPREV];  /* The last frame's changes */
+  struct nxcomp_move_s moves[NXCOMP_MAXMOVES];
   uint8_t lut[NX_BLEND_LUT_N][NX_BLEND_LUT_N];
 };
 
@@ -302,37 +350,54 @@ static inline bool wnd_pixels(FAR struct nxbe_window_s *wnd)
 }
 
 /* The shadow's inner rectangle (the window's rounded rectangle, inset by
- * the radius, moved down) and how far it reaches
+ * the radius, moved down) and how far it reaches, with the window at b
  */
 
-static void wnd_shadow(FAR struct nxbe_window_s *wnd,
-                       FAR struct nxgl_rect_s *inner,
-                       FAR struct nxgl_rect_s *reach)
+static void wnd_shadow_at(FAR struct nxbe_window_s *wnd,
+                          FAR const struct nxgl_rect_s *b,
+                          FAR struct nxgl_rect_s *inner,
+                          FAR struct nxgl_rect_s *reach)
 {
-  rect_set(inner, wnd->bounds.pt1.x + NXCOMP_R,
-           wnd->bounds.pt1.y + NXCOMP_R + wnd->fx.shadowdy,
-           wnd->bounds.pt2.x - NXCOMP_R,
-           wnd->bounds.pt2.y - NXCOMP_R + wnd->fx.shadowdy);
+  rect_set(inner, b->pt1.x + NXCOMP_R,
+           b->pt1.y + NXCOMP_R + wnd->fx.shadowdy,
+           b->pt2.x - NXCOMP_R,
+           b->pt2.y - NXCOMP_R + wnd->fx.shadowdy);
   rect_set(reach, inner->pt1.x - NXCOMP_LUTMAX + 1,
            inner->pt1.y - NXCOMP_LUTMAX + 1,
            inner->pt2.x + NXCOMP_LUTMAX - 1,
            inner->pt2.y + NXCOMP_LUTMAX - 1);
 }
 
-/* All of the display a window touches: its bounds and its shadow */
+static inline void wnd_shadow(FAR struct nxbe_window_s *wnd,
+                              FAR struct nxgl_rect_s *inner,
+                              FAR struct nxgl_rect_s *reach)
+{
+  wnd_shadow_at(wnd, &wnd->bounds, inner, reach);
+}
 
-static void wnd_extent(FAR struct nxbe_window_s *wnd,
-                       FAR struct nxgl_rect_s *ext)
+/* All of the display a window touches (its bounds and its shadow), with
+ * the window at b
+ */
+
+static void wnd_extent_at(FAR struct nxbe_window_s *wnd,
+                          FAR const struct nxgl_rect_s *b,
+                          FAR struct nxgl_rect_s *ext)
 {
   struct nxgl_rect_s inner;
   struct nxgl_rect_s reach;
 
-  *ext = wnd->bounds;
+  *ext = *b;
   if (wnd->fx.shadow > 0)
     {
-      wnd_shadow(wnd, &inner, &reach);
+      wnd_shadow_at(wnd, b, &inner, &reach);
       nxgl_rectunion(ext, ext, &reach);
     }
+}
+
+static inline void wnd_extent(FAR struct nxbe_window_s *wnd,
+                              FAR struct nxgl_rect_s *ext)
+{
+  wnd_extent_at(wnd, &wnd->bounds, ext);
 }
 
 /* Does the window hide everything below it in r? */
@@ -410,7 +475,9 @@ static void wnd_insert_above(FAR struct nxbe_window_s *wnd,
 
 /* Operations ***************************************************************/
 
-/* The band: display rectangle r is composited at r moved down by dy */
+/* Composited rectangles are the display's moved by an offset: to the back
+ * buffer's position
+ */
 
 static void op_fill(FAR const struct nxgl_rect_s *dest, nxgl_mxpixel_t c)
 {
@@ -471,21 +538,23 @@ static void op_blend_init(FAR struct nx_blend_s *b,
   b->alpha = 255;
 }
 
-/* LUT shape parameters: an inner rectangle moved by (0, dy) */
+/* LUT shape parameters: an inner rectangle moved by off */
 
 static void op_inner(FAR struct nx_blend_s *b,
-                     FAR const struct nxgl_rect_s *inner, nxgl_coord_t dy)
+                     FAR const struct nxgl_rect_s *inner,
+                     FAR const struct nxgl_point_s *off)
 {
-  b->p[0] = inner->pt1.x;
-  b->p[1] = inner->pt1.y + dy;
-  b->p[2] = inner->pt2.x;
-  b->p[3] = inner->pt2.y + dy;
+  b->p[0] = inner->pt1.x + off->x;
+  b->p[1] = inner->pt1.y + off->y;
+  b->p[2] = inner->pt2.x + off->x;
+  b->p[3] = inner->pt2.y + off->y;
 }
 
-/* Draw a window's shadow in display rectangle r, into the band */
+/* Draw a window's shadow in display rectangle r */
 
 static void comp_shadow(FAR struct nxbe_window_s *wnd,
-                        FAR const struct nxgl_rect_s *r, nxgl_coord_t dy)
+                        FAR const struct nxgl_rect_s *r,
+                        FAR const struct nxgl_point_s *off)
 {
   FAR const struct nxgl_rect_s *w = &wnd->bounds;
   struct nxgl_rect_s inner;
@@ -541,22 +610,126 @@ static void comp_shadow(FAR struct nxbe_window_s *wnd,
           continue;
         }
 
-      nxgl_rectoffset(&part[i], &part[i], 0, dy);
+      nxgl_rectoffset(&part[i], &part[i], off->x, off->y);
       op_blend_init(&b, &part[i]);
       b.colour = 0;
       b.alpha  = wnd->fx.shadow;
       b.mode   = NX_BLEND_SRC_COLOUR | NX_BLEND_MOD_LUT |
                  NX_BLEND_DITHER;
       b.slot   = NX_LUT_SHADOW;
-      op_inner(&b, &inner, dy);
+      op_inner(&b, &inner, off);
       g_nxaccel->blend(&b);
+    }
+}
+
+/* A small surface to blend the pixels of windows in memory from: their
+ * round corners, opacity and colour key.  Made when first needed, as wide
+ * as the widest display mode.
+ */
+
+static bool comp_stage(void)
+{
+  struct nxgl_size_s size;
+  nxgl_coord_t w = g_comp.be->vinfo.xres;
+  int i;
+
+  if (!g_comp.stage)
+    {
+      for (i = 0; g_nxaccel->getmode != NULL &&
+                  g_nxaccel->getmode(i, &size) >= 0; i++)
+        {
+          w = MAX(w, size.w);
+        }
+
+      g_comp.stage = g_nxaccel->surface_alloc(w, NXCOMP_STAGEH,
+                                              &g_comp.stagepos) >= 0;
+      g_comp.stagesize.w = w;
+      g_comp.stagesize.h = NXCOMP_STAGEH;
+    }
+
+  return g_comp.stage;
+}
+
+static void comp_unstage(void)
+{
+  if (g_comp.stage)
+    {
+      g_nxaccel->surface_free(&g_comp.stagepos, g_comp.stagesize.w,
+                              g_comp.stagesize.h);
+      g_comp.stage = false;
+    }
+}
+
+/* Display rectangle r of a window in memory, blended as from a surface:
+ * a staging band at a time, its pixels put there first (without a
+ * staging surface, just the pixels)
+ */
+
+static void comp_memblend(FAR struct nxbe_window_s *wnd,
+                          FAR const struct nxgl_rect_s *r,
+                          FAR const struct nxgl_point_s *off, bool corner,
+                          FAR const struct nxgl_rect_s *inner)
+{
+  unsigned int bpp = wnd->be->plane[0].pinfo.bpp;
+  struct nxgl_rect_s chunk;
+  struct nxgl_rect_s stage;
+  struct nxgl_rect_s dest;
+  struct nx_blend_s b;
+  nxgl_coord_t x;
+  nxgl_coord_t y;
+
+  if (!comp_stage())
+    {
+      nxgl_rectoffset(&dest, r, off->x, off->y);
+      op_window(wnd, r, &dest);
+      return;
+    }
+
+  for (y = r->pt1.y; y <= r->pt2.y; y += g_comp.stagesize.h)
+    {
+      for (x = r->pt1.x; x <= r->pt2.x; x += g_comp.stagesize.w)
+        {
+          FAR const uint8_t *pix;
+
+          rect_set(&chunk, x, y,
+                   MIN(r->pt2.x, x + g_comp.stagesize.w - 1),
+                   MIN(r->pt2.y, y + g_comp.stagesize.h - 1));
+          pix = (FAR const uint8_t *)wnd->fbmem +
+                (chunk.pt1.y - wnd->bounds.pt1.y) * wnd->stride +
+                (((chunk.pt1.x - wnd->bounds.pt1.x) * bpp) >> 3);
+          rect_set(&stage, g_comp.stagepos.x, g_comp.stagepos.y,
+                   g_comp.stagepos.x + chunk.pt2.x - chunk.pt1.x,
+                   g_comp.stagepos.y + chunk.pt2.y - chunk.pt1.y);
+          g_nxaccel->copy(&stage, pix, &stage.pt1, wnd->stride);
+
+          nxgl_rectoffset(&dest, &chunk, off->x, off->y);
+          op_blend_init(&b, &dest);
+          b.src   = g_comp.stagepos;
+          b.alpha = wnd->fx.opacity;
+          b.mode  = NX_BLEND_SRC_RGB;
+          if ((wnd->fx.flags & NX_FX_KEY) != 0)
+            {
+              b.mode |= NX_BLEND_KEY;
+              b.key   = (uint16_t)wnd->fx.key;
+            }
+
+          if (corner)
+            {
+              b.mode |= NX_BLEND_MOD_LUT;
+              b.slot  = NX_LUT_CORNER;
+              op_inner(&b, inner, off);
+            }
+
+          g_nxaccel->blend(&b);
+        }
     }
 }
 
 /* A window's pixels in display rectangle c (inside its bounds) */
 
 static void comp_pixels(FAR struct nxbe_window_s *wnd,
-                        FAR const struct nxgl_rect_s *c, nxgl_coord_t dy)
+                        FAR const struct nxgl_rect_s *c,
+                        FAR const struct nxgl_point_s *off)
 {
   FAR const struct nxgl_rect_s *w = &wnd->bounds;
   bool plain = wnd->fx.opacity == 255 && (wnd->fx.flags & NX_FX_KEY) == 0;
@@ -568,15 +741,6 @@ static void comp_pixels(FAR struct nxbe_window_s *wnd,
   int ncorner = 0;
   int n = 0;
   int i;
-
-  if (!wnd->surface)
-    {
-      /* In memory: no blending from there, just the pixels */
-
-      nxgl_rectoffset(&dest, c, 0, dy);
-      op_window(wnd, c, &dest);
-      return;
-    }
 
   rect_set(&inner, w->pt1.x + NXCOMP_R, w->pt1.y + NXCOMP_R,
            w->pt2.x - NXCOMP_R, w->pt2.y - NXCOMP_R);
@@ -612,10 +776,16 @@ static void comp_pixels(FAR struct nxbe_window_s *wnd,
           continue;
         }
 
-      nxgl_rectoffset(&dest, &part[i], 0, dy);
+      nxgl_rectoffset(&dest, &part[i], off->x, off->y);
       if (i >= ncorner && plain)
         {
           op_window(wnd, &part[i], &dest);
+          continue;
+        }
+
+      if (!wnd->surface)
+        {
+          comp_memblend(wnd, &part[i], off, i < ncorner, &inner);
           continue;
         }
 
@@ -634,7 +804,7 @@ static void comp_pixels(FAR struct nxbe_window_s *wnd,
         {
           b.mode |= NX_BLEND_MOD_LUT;
           b.slot  = NX_LUT_CORNER;
-          op_inner(&b, &inner, dy);
+          op_inner(&b, &inner, off);
         }
 
       g_nxaccel->blend(&b);
@@ -646,7 +816,8 @@ static void comp_pixels(FAR struct nxbe_window_s *wnd,
  */
 
 static void comp_border(FAR struct nxbe_window_s *wnd,
-                        FAR const struct nxgl_rect_s *c, nxgl_coord_t dy)
+                        FAR const struct nxgl_rect_s *c,
+                        FAR const struct nxgl_point_s *off)
 {
   FAR const struct nxgl_rect_s *w = &wnd->bounds;
   struct nxgl_rect_s inner;
@@ -677,75 +848,46 @@ static void comp_border(FAR struct nxbe_window_s *wnd,
           continue;
         }
 
-      nxgl_rectoffset(&part[i], &part[i], 0, dy);
+      nxgl_rectoffset(&part[i], &part[i], off->x, off->y);
       op_blend_init(&b, &part[i]);
       b.colour = 0xffff;
       b.alpha  = wnd->fx.border;
       b.mode   = NX_BLEND_SRC_COLOUR | NX_BLEND_MOD_LUT;
       b.slot   = NX_LUT_RING;
-      op_inner(&b, &inner, dy);
+      op_inner(&b, &inner, off);
       g_nxaccel->blend(&b);
     }
 }
 
-/* One operation of a window's (window coordinates) at org on the device,
- * clipped to clip (device coordinates)
+/* One operation of a window's into dest (device coordinates), its image
+ * source (if any) at spos; shape parameters are the window's moved to org
  */
 
-static void comp_gpuop(FAR struct nxbe_window_s *wnd,
-                       FAR const struct nx_gpuop_s *op,
-                       FAR const struct nxgl_point_s *org,
-                       FAR const struct nxgl_rect_s *clip)
+static void comp_gpuop_do(FAR const struct nx_gpuop_s *op,
+                          FAR const struct nxgl_point_s *org,
+                          FAR const struct nxgl_rect_s *dest,
+                          FAR const struct nxgl_point_s *spos)
 {
-  FAR struct nxbe_window_s *src;
-  struct nxgl_rect_s whole;
-  struct nxgl_rect_s dest;
-  struct nxgl_point_s spos;
   struct nx_blend_s b;
   uint8_t smode = op->mode & NX_BLEND_SRC_MASK;
   bool image = op->op == NX_GPUOP_COPY ||
                (op->op == NX_GPUOP_BLEND && smode != NX_BLEND_SRC_COLOUR);
 
-  if (op->w <= 0 || op->h <= 0)
-    {
-      return;
-    }
-
-  rect_set(&whole, org->x + op->x, org->y + op->y,
-           org->x + op->x + op->w - 1, org->y + op->y + op->h - 1);
-  nxgl_rectintersect(&dest, &whole, clip);
-  if (rect_empty(&dest))
-    {
-      return;
-    }
-
-  if (image)
-    {
-      src = op->src != NULL ? (FAR struct nxbe_window_s *)op->src : wnd;
-      if (!src->surface)
-        {
-          return;                         /* Images come from surfaces */
-        }
-
-      spos.x = src->surfpos.x + op->sx + dest.pt1.x - whole.pt1.x;
-      spos.y = src->surfpos.y + op->sy + dest.pt1.y - whole.pt1.y;
-    }
-
   switch (op->op)
     {
       case NX_GPUOP_FILL:
-        op_fill(&dest, op->colour);
+        op_fill(dest, op->colour);
         break;
 
       case NX_GPUOP_COPY:
-        op_copy(&spos, &dest);
+        op_copy(spos, dest);
         break;
 
       case NX_GPUOP_BLEND:
-        op_blend_init(&b, &dest);
+        op_blend_init(&b, dest);
         if (image)
           {
-            b.src = spos;
+            b.src = *spos;
           }
 
         b.colour = op->colour;
@@ -787,10 +929,117 @@ static void comp_gpuop(FAR struct nxbe_window_s *wnd,
     }
 }
 
-/* Draw one window into the band, where it meets display rectangle r */
+/* An image source in memory (a window with no room for a surface): a
+ * staging band at a time, its pixels put there first
+ */
+
+static void comp_gpuop_mem(FAR struct nxbe_window_s *src,
+                           FAR const struct nx_gpuop_s *op,
+                           FAR const struct nxgl_point_s *org,
+                           FAR const struct nxgl_rect_s *whole,
+                           FAR const struct nxgl_rect_s *dest)
+{
+  unsigned int bpp = src->be->plane[0].pinfo.bpp;
+  struct nxgl_rect_s chunk;
+  struct nxgl_rect_s srect;
+  struct nxgl_rect_s sbounds;
+  struct nxgl_rect_s stage;
+  nxgl_coord_t x;
+  nxgl_coord_t y;
+
+  if (src->fbmem == NULL || !comp_stage())
+    {
+      return;
+    }
+
+  rect_set(&sbounds, 0, 0, src->bounds.pt2.x - src->bounds.pt1.x,
+           src->bounds.pt2.y - src->bounds.pt1.y);
+  for (y = dest->pt1.y; y <= dest->pt2.y; y += g_comp.stagesize.h)
+    {
+      for (x = dest->pt1.x; x <= dest->pt2.x; x += g_comp.stagesize.w)
+        {
+          FAR const uint8_t *pix;
+
+          /* The source of this piece, in the source window, inside it */
+
+          rect_set(&srect, op->sx + x - whole->pt1.x,
+                   op->sy + y - whole->pt1.y,
+                   op->sx + MIN(dest->pt2.x, x + g_comp.stagesize.w - 1) -
+                   whole->pt1.x,
+                   op->sy + MIN(dest->pt2.y, y + g_comp.stagesize.h - 1) -
+                   whole->pt1.y);
+          nxgl_rectintersect(&srect, &srect, &sbounds);
+          if (rect_empty(&srect))
+            {
+              continue;
+            }
+
+          rect_set(&chunk, whole->pt1.x + srect.pt1.x - op->sx,
+                   whole->pt1.y + srect.pt1.y - op->sy,
+                   whole->pt1.x + srect.pt2.x - op->sx,
+                   whole->pt1.y + srect.pt2.y - op->sy);
+          pix = (FAR const uint8_t *)src->fbmem +
+                srect.pt1.y * src->stride + ((srect.pt1.x * bpp) >> 3);
+          rect_set(&stage, g_comp.stagepos.x, g_comp.stagepos.y,
+                   g_comp.stagepos.x + chunk.pt2.x - chunk.pt1.x,
+                   g_comp.stagepos.y + chunk.pt2.y - chunk.pt1.y);
+          g_nxaccel->copy(&stage, pix, &stage.pt1, src->stride);
+          comp_gpuop_do(op, org, &chunk, &g_comp.stagepos);
+        }
+    }
+}
+
+/* One operation of a window's (window coordinates) at org on the device,
+ * clipped to clip (device coordinates)
+ */
+
+static void comp_gpuop(FAR struct nxbe_window_s *wnd,
+                       FAR const struct nx_gpuop_s *op,
+                       FAR const struct nxgl_point_s *org,
+                       FAR const struct nxgl_rect_s *clip)
+{
+  FAR struct nxbe_window_s *src;
+  struct nxgl_rect_s whole;
+  struct nxgl_rect_s dest;
+  struct nxgl_point_s spos;
+  uint8_t smode = op->mode & NX_BLEND_SRC_MASK;
+  bool image = op->op == NX_GPUOP_COPY ||
+               (op->op == NX_GPUOP_BLEND && smode != NX_BLEND_SRC_COLOUR);
+
+  if (op->w <= 0 || op->h <= 0)
+    {
+      return;
+    }
+
+  rect_set(&whole, org->x + op->x, org->y + op->y,
+           org->x + op->x + op->w - 1, org->y + op->y + op->h - 1);
+  nxgl_rectintersect(&dest, &whole, clip);
+  if (rect_empty(&dest))
+    {
+      return;
+    }
+
+  if (image)
+    {
+      src = op->src != NULL ? (FAR struct nxbe_window_s *)op->src : wnd;
+      if (!src->surface)
+        {
+          comp_gpuop_mem(src, op, org, &whole, &dest);
+          return;
+        }
+
+      spos.x = src->surfpos.x + op->sx + dest.pt1.x - whole.pt1.x;
+      spos.y = src->surfpos.y + op->sy + dest.pt1.y - whole.pt1.y;
+    }
+
+  comp_gpuop_do(op, org, &dest, &spos);
+}
+
+/* Draw one window where it meets display rectangle r */
 
 static void comp_window(FAR struct nxbe_window_s *wnd,
-                        FAR const struct nxgl_rect_s *r, nxgl_coord_t dy)
+                        FAR const struct nxgl_rect_s *r,
+                        FAR const struct nxgl_point_s *off)
 {
   struct nxgl_rect_s c;
   struct nxgl_rect_s dest;
@@ -800,14 +1049,14 @@ static void comp_window(FAR struct nxbe_window_s *wnd,
 
   if (wnd == &g_comp.be->bkgd)
     {
-      nxgl_rectoffset(&dest, r, 0, dy);
+      nxgl_rectoffset(&dest, r, off->x, off->y);
       op_fill(&dest, wnd->be->bgcolor[0]);
       return;
     }
 
   if (wnd->fx.shadow > 0)
     {
-      comp_shadow(wnd, r, dy);
+      comp_shadow(wnd, r, off);
     }
 
   nxgl_rectintersect(&c, r, &wnd->bounds);
@@ -818,7 +1067,7 @@ static void comp_window(FAR struct nxbe_window_s *wnd,
 
   if (wnd->fx.backdrop > 0)
     {
-      nxgl_rectoffset(&dest, &c, 0, dy);
+      nxgl_rectoffset(&dest, &c, off->x, off->y);
       op_blend_init(&b, &dest);
       b.colour = wnd->fx.tint;
       b.alpha  = wnd->fx.backdrop;
@@ -833,7 +1082,7 @@ static void comp_window(FAR struct nxbe_window_s *wnd,
                    wnd->bounds.pt2.y - NXCOMP_R);
           b.mode |= NX_BLEND_MOD_LUT;
           b.slot  = NX_LUT_CORNER;
-          op_inner(&b, &inner, dy);
+          op_inner(&b, &inner, off);
         }
 
       g_nxaccel->blend(&b);
@@ -841,19 +1090,19 @@ static void comp_window(FAR struct nxbe_window_s *wnd,
 
   if (wnd_pixels(wnd))
     {
-      comp_pixels(wnd, &c, dy);
+      comp_pixels(wnd, &c, off);
     }
 
   if (wnd->fx.border > 0 && wnd_round(wnd))
     {
-      comp_border(wnd, &c, dy);
+      comp_border(wnd, &c, off);
     }
 
   if (NXBE_ISLAYER(wnd) && wnd->ndlist > 0)
     {
-      org.x = wnd->bounds.pt1.x;
-      org.y = wnd->bounds.pt1.y + dy;
-      nxgl_rectoffset(&dest, &c, 0, dy);
+      org.x = wnd->bounds.pt1.x + off->x;
+      org.y = wnd->bounds.pt1.y + off->y;
+      nxgl_rectoffset(&dest, &c, off->x, off->y);
       for (i = 0; i < wnd->ndlist; i++)
         {
           comp_gpuop(wnd, &wnd->dlist[i], &org, &dest);
@@ -861,32 +1110,23 @@ static void comp_window(FAR struct nxbe_window_s *wnd,
     }
 }
 
-/* Composite display rectangle r (at most a band high) */
+/* Composite display rectangle r, at off: from the top window that hides
+ * everything below it there, up
+ */
 
-static void comp_band(FAR const struct nxgl_rect_s *r)
+static void comp_rect(FAR const struct nxgl_rect_s *r,
+                      FAR const struct nxgl_point_s *off)
 {
   FAR struct nxbe_state_s *be = g_comp.be;
   FAR struct nxbe_window_s *start;
   FAR struct nxbe_window_s *wnd;
   struct nxgl_rect_s ext;
-  struct nxgl_rect_s band;
-  struct nxgl_point_s src;
-  nxgl_coord_t dy;
-  bool alone = true;
-
-  /* The top window that hides everything below it here */
 
   for (start = be->topwnd; start != NULL; start = start->below)
     {
       if (wnd_covers(start, r))
         {
           break;
-        }
-
-      wnd_extent(start, &ext);
-      if (nxgl_rectoverlap(&ext, (FAR struct nxgl_rect_s *)r))
-        {
-          alone = false;
         }
     }
 
@@ -895,30 +1135,431 @@ static void comp_band(FAR const struct nxgl_rect_s *r)
       start = &be->bkgd;
     }
 
-  /* Nothing above it here: straight to the display */
-
-  if (alone && (start == &be->bkgd || start->surface))
-    {
-      comp_window(start, r, 0);
-      return;
-    }
-
-  /* Else bottom to top in the band, then the band to the display */
-
-  dy = g_comp.bandy - r->pt1.y;
-  for (wnd = start; wnd != NULL; wnd = wnd->above)
+  comp_window(start, r, off);
+  for (wnd = start->above; wnd != NULL; wnd = wnd->above)
     {
       wnd_extent(wnd, &ext);
-      if (wnd == &be->bkgd ||
-          nxgl_rectoverlap(&ext, (FAR struct nxgl_rect_s *)r))
+      if (nxgl_rectoverlap(&ext, (FAR struct nxgl_rect_s *)r))
         {
-          comp_window(wnd, r, dy);
+          comp_window(wnd, r, off);
+        }
+    }
+}
+
+/* Rectangle lists **********************************************************/
+
+static bool list_add(FAR struct nxgl_rect_s *list, FAR int *n, int max,
+                     FAR const struct nxgl_rect_s *r)
+{
+  if (rect_empty(r))
+    {
+      return true;
+    }
+
+  if (*n >= max)
+    {
+      return false;
+    }
+
+  list[(*n)++] = *r;
+  return true;
+}
+
+/* p minus c: up to four rectangles, above, below, left and right of c */
+
+static int rect_minus(FAR const struct nxgl_rect_s *p,
+                      FAR const struct nxgl_rect_s *c,
+                      FAR struct nxgl_rect_s part[4])
+{
+  struct nxgl_rect_s x;
+  int n = 0;
+
+  nxgl_rectintersect(&x, p, c);
+  if (rect_empty(&x))
+    {
+      part[0] = *p;
+      return 1;
+    }
+
+  rect_set(&part[n], p->pt1.x, p->pt1.y, p->pt2.x, x.pt1.y - 1);
+  n += !rect_empty(&part[n]);
+  rect_set(&part[n], p->pt1.x, x.pt2.y + 1, p->pt2.x, p->pt2.y);
+  n += !rect_empty(&part[n]);
+  rect_set(&part[n], p->pt1.x, x.pt1.y, x.pt1.x - 1, x.pt2.y);
+  n += !rect_empty(&part[n]);
+  rect_set(&part[n], x.pt2.x + 1, x.pt1.y, p->pt2.x, x.pt2.y);
+  n += !rect_empty(&part[n]);
+  return n;
+}
+
+/* p minus all of cut[]: the pieces, or -1 if there are too many */
+
+static int rect_cut(FAR const struct nxgl_rect_s *p,
+                    FAR const struct nxgl_rect_s *cut, int ncut,
+                    FAR struct nxgl_rect_s *piece)
+{
+  struct nxgl_rect_s part[4];
+  int npiece = 1;
+  int i;
+  int j;
+  int k;
+  int m;
+
+  piece[0] = *p;
+  for (i = 0; i < ncut && npiece > 0; i++)
+    {
+      for (j = 0; j < npiece; j++)
+        {
+          if (!nxgl_rectoverlap(&piece[j],
+                                (FAR struct nxgl_rect_s *)&cut[i]))
+            {
+              continue;
+            }
+
+          m = rect_minus(&piece[j], &cut[i], part);
+          if (npiece - 1 + m > NXCOMP_MAXPIECES)
+            {
+              return -1;
+            }
+
+          /* The first part takes the piece's place, the rest go last (and
+           * are cut by this rectangle no more: they miss it)
+           */
+
+          piece[j] = part[0];
+          for (k = 1; k < m; k++)
+            {
+              piece[npiece++] = part[k];
+            }
+
+          if (m == 0)
+            {
+              piece[j--] = piece[--npiece];
+            }
         }
     }
 
-  nxgl_rectoffset(&band, r, 0, dy);
-  src = band.pt1;
-  op_copy(&src, r);
+  return npiece;
+}
+
+/* Display buffers **********************************************************/
+
+static inline int comp_back(void)
+{
+  return g_comp.dbuf ? g_comp.front ^ 1 : g_comp.front;
+}
+
+/* Copy display rectangle r from the front buffer to the back one */
+
+static void comp_bufcopy(FAR const struct nxgl_rect_s *src,
+                         FAR const struct nxgl_rect_s *dest)
+{
+  struct nxgl_point_s spos;
+  struct nxgl_rect_s d;
+
+  spos.x = src->pt1.x + g_comp.buf[g_comp.front].x;
+  spos.y = src->pt1.y + g_comp.buf[g_comp.front].y;
+  nxgl_rectoffset(&d, dest, g_comp.buf[comp_back()].x,
+                  g_comp.buf[comp_back()].y);
+  op_copy(&spos, &d);
+}
+
+/* The back buffer lacks the last frame's changes: copy them over from the
+ * front, except where cut[] (what this frame redraws) covers them
+ */
+
+static void comp_age(FAR const struct nxgl_rect_s *cut, int ncut)
+{
+  struct nxgl_rect_s piece[NXCOMP_MAXPIECES];
+  int n;
+  int i;
+  int j;
+
+  for (i = 0; i < g_comp.nprev; i++)
+    {
+      n = rect_cut(&g_comp.prev[i], cut, ncut, piece);
+      if (n < 0)
+        {
+          comp_bufcopy(&g_comp.prev[i], &g_comp.prev[i]);
+          continue;
+        }
+
+      for (j = 0; j < n; j++)
+        {
+          comp_bufcopy(&piece[j], &piece[j]);
+        }
+    }
+
+  g_comp.nprev = 0;
+}
+
+static void comp_flip(int buf)
+{
+  g_nxaccel->flip(&g_comp.buf[buf]);
+  g_comp.front    = buf;
+  g_comp.lastflip = clock_systime_ticks();
+}
+
+/* A second display buffer: a surface of the display's size, if there is
+ * room.  It holds nothing yet: all of the display is the last frame's
+ * change to it.
+ */
+
+static void comp_getback(void)
+{
+  FAR struct nxbe_state_s *be = g_comp.be;
+  struct nxgl_point_s pos;
+
+  g_comp.retry = false;
+  if (g_comp.dbuf || g_nxaccel->flip == NULL ||
+      g_nxaccel->surface_alloc(be->vinfo.xres, be->vinfo.yres, &pos) < 0)
+    {
+      return;
+    }
+
+  g_comp.buf[1]    = pos;
+  g_comp.bufsize.w = be->vinfo.xres;
+  g_comp.bufsize.h = be->vinfo.yres;
+  g_comp.dbuf      = true;
+  g_comp.nprev     = 1;
+  g_comp.prev[0]   = be->bkgd.bounds;
+  ginfo("Double buffered: (0,0) and (%d,%d)\n", pos.x, pos.y);
+}
+
+/* Down to one buffer, the display at (0, 0), shown and up to date */
+
+static void comp_dropback(void)
+{
+  if (!g_comp.dbuf)
+    {
+      return;
+    }
+
+  if (g_comp.front != 0)
+    {
+      comp_age(NULL, 0);                 /* buf[0] is the back buffer */
+      comp_flip(0);
+    }
+
+  g_nxaccel->surface_free(&g_comp.buf[1], g_comp.bufsize.w,
+                          g_comp.bufsize.h);
+  g_comp.dbuf  = false;
+  g_comp.nprev = 0;
+  ginfo("Single buffered\n");
+}
+
+/* Moves ********************************************************************/
+
+static FAR struct nxcomp_move_s *move_find(FAR struct nxbe_window_s *wnd)
+{
+  int i;
+
+  for (i = 0; i < g_comp.nmoves; i++)
+    {
+      if (g_comp.moves[i].wnd == wnd)
+        {
+          return &g_comp.moves[i];
+        }
+    }
+
+  return NULL;
+}
+
+/* The window will not be copied from where it was: that is out of date */
+
+static void move_drop(FAR struct nxbe_window_s *wnd)
+{
+  FAR struct nxcomp_move_s *m = move_find(wnd);
+  struct nxgl_rect_s ext;
+
+  if (m != NULL)
+    {
+      wnd_extent_at(wnd, &m->from, &ext);
+      *m = g_comp.moves[--g_comp.nmoves];
+      nxbe_compose_damage(&ext);
+    }
+}
+
+/* Can the window's composited pixels be copied to where it is now? */
+
+static bool move_copyable(FAR struct nxcomp_move_s *m, int ncopy)
+{
+  FAR struct nxbe_window_s *wnd = m->wnd;
+
+  return !NXBE_ISHIDDEN(wnd) && wnd->surface && !NXBE_ISLAYER(wnd) &&
+         wnd->fx.opacity == 255 && (wnd->fx.flags & NX_FX_KEY) == 0 &&
+         wnd->fx.backdrop == 0 &&
+         m->from.pt2.x - m->from.pt1.x == wnd->bounds.pt2.x -
+                                          wnd->bounds.pt1.x &&
+         m->from.pt2.y - m->from.pt1.y == wnd->bounds.pt2.y -
+                                          wnd->bounds.pt1.y &&
+         (g_comp.dbuf || ncopy == 0);  /* One buffer: one copy in place */
+}
+
+/* A moved window, copied: what to copy, and the damage around it (add[]).
+ * False if add[] has no room.
+ */
+
+static bool move_plan(FAR struct nxcomp_move_s *m,
+                      FAR struct nxcomp_copy_s *copy,
+                      FAR struct nxgl_rect_s *add, FAR int *nadd, int max)
+{
+  FAR struct nxbe_window_s *wnd = m->wnd;
+  FAR const struct nxgl_rect_s *from = &m->from;
+  FAR const struct nxgl_rect_s *to = &wnd->bounds;
+  FAR const struct nxgl_rect_s *disp = &g_comp.be->bkgd.bounds;
+  FAR struct nxbe_window_s *above;
+  FAR struct nxcomp_move_s *am;
+  struct nxgl_rect_s part[4];
+  struct nxgl_rect_s u;
+  struct nxgl_rect_s e;
+  struct nxgl_rect_s x;
+  nxgl_coord_t dx = to->pt1.x - from->pt1.x;
+  nxgl_coord_t dy = to->pt1.y - from->pt1.y;
+  bool ok = true;
+  int n;
+  int i;
+
+  /* What is copied: the old pixels that were on the display, to where
+   * they land on it
+   */
+
+  nxgl_rectintersect(&copy->src, from, disp);
+  nxgl_rectoffset(&copy->dest, &copy->src, dx, dy);
+  nxgl_rectintersect(&copy->dest, &copy->dest, disp);
+  nxgl_rectoffset(&copy->src, &copy->dest, -dx, -dy);
+
+  /* What it uncovered and its shadow, old and new: all it touches, then
+   * and now, but for where it is
+   */
+
+  wnd_extent_at(wnd, from, &u);
+  wnd_extent_at(wnd, to, &e);
+  nxgl_rectunion(&u, &u, &e);
+  n = rect_minus(&u, to, part);
+  for (i = 0; i < n; i++)
+    {
+      ok &= list_add(add, nadd, max, &part[i]);
+    }
+
+  /* Where it is, but what the copy did not bring (off the display) */
+
+  if (rect_empty(&copy->dest))
+    {
+      ok &= list_add(add, nadd, max, to);
+    }
+  else
+    {
+      n = rect_minus(to, &copy->dest, part);
+      for (i = 0; i < n && !rect_contains(&copy->dest, to); i++)
+        {
+          ok &= list_add(add, nadd, max, &part[i]);
+        }
+    }
+
+  /* Its round corners show what is below */
+
+  if (wnd_round(wnd))
+    {
+      rect_set(&e, to->pt1.x, to->pt1.y,
+               to->pt1.x + NXCOMP_R - 1, to->pt1.y + NXCOMP_R - 1);
+      ok &= list_add(add, nadd, max, &e);
+      rect_set(&e, to->pt2.x - NXCOMP_R + 1, to->pt1.y,
+               to->pt2.x, to->pt1.y + NXCOMP_R - 1);
+      ok &= list_add(add, nadd, max, &e);
+      rect_set(&e, to->pt1.x, to->pt2.y - NXCOMP_R + 1,
+               to->pt1.x + NXCOMP_R - 1, to->pt2.y);
+      ok &= list_add(add, nadd, max, &e);
+      rect_set(&e, to->pt2.x - NXCOMP_R + 1, to->pt2.y - NXCOMP_R + 1,
+               to->pt2.x, to->pt2.y);
+      ok &= list_add(add, nadd, max, &e);
+    }
+
+  /* What was out of date where it was (its own drawing, what changed
+   * over it) is out of date where the copy takes it
+   */
+
+  for (i = 0; i < g_comp.ndamage; i++)
+    {
+      nxgl_rectintersect(&x, &g_comp.damage[i], from);
+      nxgl_rectoffset(&x, &x, dx, dy);
+      ok &= list_add(add, nadd, max, &x);
+    }
+
+  /* Windows above it: they were over the pixels copied (where they were
+   * then, if they moved too), and are over where it is now
+   */
+
+  for (above = wnd->above; above != NULL; above = above->above)
+    {
+      wnd_extent(above, &e);
+      nxgl_rectintersect(&x, &e, to);
+      ok &= list_add(add, nadd, max, &x);
+      nxgl_rectintersect(&x, &e, from);
+      nxgl_rectoffset(&x, &x, dx, dy);
+      ok &= list_add(add, nadd, max, &x);
+
+      am = move_find(above);
+      if (am != NULL)
+        {
+          wnd_extent_at(above, &am->from, &e);
+          nxgl_rectintersect(&x, &e, from);
+          nxgl_rectoffset(&x, &x, dx, dy);
+          ok &= list_add(add, nadd, max, &x);
+        }
+    }
+
+  return ok;
+}
+
+/* The moves of this frame: copies where the windows can be copied, and
+ * damage for the rest
+ */
+
+static int comp_moves(FAR struct nxcomp_copy_s *copy)
+{
+  struct nxgl_rect_s add[NXCOMP_MAXADD];
+  struct nxgl_rect_s e;
+  int ncopy = 0;
+  int nadd = 0;
+  int start;
+  int i;
+
+  for (i = 0; i < g_comp.nmoves; i++)
+    {
+      FAR struct nxcomp_move_s *m = &g_comp.moves[i];
+
+      start = nadd;
+      if (move_copyable(m, ncopy) &&
+          move_plan(m, &copy[ncopy], add, &nadd, NXCOMP_MAXADD - 2))
+        {
+          if (!rect_empty(&copy[ncopy].dest))
+            {
+              ncopy++;
+            }
+
+          continue;
+        }
+
+      /* Composited again, where it was and where it is */
+
+      nadd = start;
+      wnd_extent_at(m->wnd, &m->from, &e);
+      list_add(add, &nadd, NXCOMP_MAXADD, &e);
+      if (!NXBE_ISHIDDEN(m->wnd))
+        {
+          wnd_extent(m->wnd, &e);
+          list_add(add, &nadd, NXCOMP_MAXADD, &e);
+        }
+    }
+
+  g_comp.nmoves = 0;
+  for (i = 0; i < nadd; i++)
+    {
+      nxbe_compose_damage(&add[i]);
+    }
+
+  return ncopy;
 }
 
 /****************************************************************************
@@ -929,18 +1570,16 @@ static void comp_band(FAR const struct nxgl_rect_s *r)
  * Name: nxbe_compose_install
  *
  * Description:
- *   Composite if the hardware can: blending, shape tables, and room for
- *   the band.  Called once the board's operations are in place.
+ *   Composite if the hardware can: blending, shape tables and surfaces;
+ *   double buffered if it can flip and there is room for a second display
+ *   buffer.  Called once the board's operations are in place.
  *
  ****************************************************************************/
 
 void nxbe_compose_install(FAR struct nxbe_state_s *be)
 {
-  struct nxgl_point_s pos;
-  nxgl_coord_t w = be->vinfo.xres;
-
+  memset(&g_comp, 0, sizeof(g_comp));
   g_comp.be = be;
-  g_comp.on = false;
 
   if (g_nxaccel == NULL || g_nxaccel->blend == NULL ||
       g_nxaccel->set_lut == NULL || g_nxaccel->surface_alloc == NULL)
@@ -949,29 +1588,97 @@ void nxbe_compose_install(FAR struct nxbe_state_s *be)
       return;
     }
 
-  g_comp.bandh = MIN(NXCOMP_BANDH, be->vinfo.yres);
-  if (g_nxaccel->surface_alloc(w, g_comp.bandh, &pos) < 0 || pos.x != 0)
+  lut_corner(g_comp.lut);
+  nxbe_compose_setlut(NX_LUT_CORNER, g_comp.lut);
+  lut_shadow(g_comp.lut);
+  nxbe_compose_setlut(NX_LUT_SHADOW, g_comp.lut);
+  lut_ring(g_comp.lut);
+  nxbe_compose_setlut(NX_LUT_RING, g_comp.lut);
+
+  /* The display at (0, 0) is shown (and becomes the front buffer) */
+
+  if (g_nxaccel->flip != NULL)
     {
-      gerr("ERROR: no room for the composition band\n");
-      return;
+      g_nxaccel->flip(&g_comp.buf[0]);
     }
 
-  g_comp.bandy = pos.y;
-
-  lut_corner(g_comp.lut);
-  g_nxaccel->set_lut(NX_LUT_CORNER, g_comp.lut);
-  lut_shadow(g_comp.lut);
-  g_nxaccel->set_lut(NX_LUT_SHADOW, g_comp.lut);
-  lut_ring(g_comp.lut);
-  g_nxaccel->set_lut(NX_LUT_RING, g_comp.lut);
-
   g_comp.on = true;
-  ginfo("Compositing, band at line %d\n", g_comp.bandy);
+  comp_getback();
 }
 
 bool nxbe_compose_on(void)
 {
   return g_comp.on;
+}
+
+/****************************************************************************
+ * Name: nxbe_compose_reclaim, nxbe_compose_freed
+ *
+ * Description:
+ *   A surface did not fit: give up the second display buffer, if there is
+ *   one (true: try again).  Surfaces have been freed: try for a second
+ *   display buffer again at the next frame.
+ *
+ ****************************************************************************/
+
+bool nxbe_compose_reclaim(void)
+{
+  if (!g_comp.on || !g_comp.dbuf)
+    {
+      return false;
+    }
+
+  comp_dropback();
+  return true;
+}
+
+void nxbe_compose_freed(void)
+{
+  g_comp.retry = true;
+}
+
+/****************************************************************************
+ * Name: nxbe_compose_setmode
+ *
+ * Description:
+ *   The display is changing size (a display mode): before the change
+ *   (begin), give up the second buffer; after it (with be->vinfo and the
+ *   background's bounds updated, the surfaces moved out of the display),
+ *   take a new one and composite all of it.
+ *
+ ****************************************************************************/
+
+void nxbe_compose_setmode(bool begin)
+{
+  if (!g_comp.on)
+    {
+      return;
+    }
+
+  if (begin)
+    {
+      if (g_comp.dbuf)
+        {
+          if (g_comp.front != 0)
+            {
+              comp_flip(0);
+            }
+
+          g_nxaccel->surface_free(&g_comp.buf[1], g_comp.bufsize.w,
+                                  g_comp.bufsize.h);
+          g_comp.dbuf = false;
+        }
+
+      comp_unstage();                    /* It may be in the way */
+      g_comp.nprev   = 0;
+      g_comp.nmoves  = 0;
+      g_comp.ndamage = 0;
+      return;
+    }
+
+  comp_getback();
+  g_comp.nprev = 0;                      /* All of it is drawn anyway */
+  nxbe_compose_damage(&g_comp.be->bkgd.bounds);
 }
 
 /****************************************************************************
@@ -1018,7 +1725,7 @@ void nxbe_compose_damage(FAR const struct nxgl_rect_s *rect)
         }
     }
 
-  if (g_comp.ndamage == 0)
+  if (g_comp.ndamage == 0 && g_comp.nmoves == 0)
     {
       g_comp.since = clock_systime_ticks();
     }
@@ -1082,13 +1789,21 @@ void nxbe_compose_damage_wrect(FAR struct nxbe_window_s *wnd,
   nxbe_compose_damage(&r);
 }
 
-/* All that the window touches (bounds and shadow) is out of date */
+/* All that the window touches (bounds and shadow) is out of date, and
+ * where it was at the last frame if it has moved since
+ */
 
 void nxbe_compose_damage_window(FAR struct nxbe_window_s *wnd)
 {
   struct nxgl_rect_s ext;
 
-  if (g_comp.on && wnd != &g_comp.be->bkgd && !NXBE_ISHIDDEN(wnd))
+  if (!g_comp.on || wnd == &g_comp.be->bkgd)
+    {
+      return;
+    }
+
+  move_drop(wnd);
+  if (!NXBE_ISHIDDEN(wnd))
     {
       wnd_extent(wnd, &ext);
       nxbe_compose_damage(&ext);
@@ -1096,23 +1811,70 @@ void nxbe_compose_damage_window(FAR struct nxbe_window_s *wnd)
 }
 
 /****************************************************************************
+ * Name: nxbe_compose_setposition
+ *
+ * Description:
+ *   Move a window.  One the compositor can copy (it has a surface) is
+ *   only noted, with where it was at the last frame; the frame works out
+ *   what to copy and what is damaged.  Others damage where they were and
+ *   where they are.
+ *
+ ****************************************************************************/
+
+void nxbe_compose_setposition(FAR struct nxbe_window_s *wnd,
+                              FAR const struct nxgl_point_s *pos)
+{
+  nxgl_coord_t dx = pos->x - wnd->bounds.pt1.x;
+  nxgl_coord_t dy = pos->y - wnd->bounds.pt1.y;
+
+  if (dx == 0 && dy == 0)
+    {
+      return;
+    }
+
+  if (!NXBE_ISHIDDEN(wnd) && wnd->surface && !NXBE_ISLAYER(wnd) &&
+      (move_find(wnd) != NULL || g_comp.nmoves < NXCOMP_MAXMOVES))
+    {
+      if (move_find(wnd) == NULL)
+        {
+          if (g_comp.ndamage == 0 && g_comp.nmoves == 0)
+            {
+              g_comp.since = clock_systime_ticks();
+            }
+
+          g_comp.moves[g_comp.nmoves].wnd  = wnd;
+          g_comp.moves[g_comp.nmoves].from = wnd->bounds;
+          g_comp.nmoves++;
+        }
+
+      nxgl_rectoffset(&wnd->bounds, &wnd->bounds, dx, dy);
+      return;
+    }
+
+  nxbe_compose_damage_window(wnd);
+  nxgl_rectoffset(&wnd->bounds, &wnd->bounds, dx, dy);
+  nxbe_compose_damage_window(wnd);
+}
+
+/****************************************************************************
  * Name: nxbe_compose_restack
  *
  * Description:
  *   Put a window (in the hierarchy) at the top of its layer, or at the
- *   bottom of it.
+ *   bottom of it.  Returns whether the stacking has changed.
  *
  ****************************************************************************/
 
-void nxbe_compose_restack(FAR struct nxbe_window_s *wnd, bool top)
+bool nxbe_compose_restack(FAR struct nxbe_window_s *wnd, bool top)
 {
   FAR struct nxbe_state_s *be = wnd->be;
+  FAR struct nxbe_window_s *oldbelow = wnd->below;
   FAR struct nxbe_window_s *below;
 
   if (wnd == &be->bkgd || NXBE_ISHIDDEN(wnd) || wnd->below == NULL ||
       NXBE_STATE_ISMODAL(be))
     {
-      return;
+      return false;
     }
 
   wnd_unlink(wnd);
@@ -1139,6 +1901,7 @@ void nxbe_compose_restack(FAR struct nxbe_window_s *wnd, bool top)
     }
 
   wnd_insert_above(wnd, below);
+  return below != oldbelow;
 }
 
 /****************************************************************************
@@ -1255,8 +2018,21 @@ void nxbe_compose_gpuops(FAR struct nxbe_window_s *wnd,
   struct nxgl_rect_s r;
   int i;
 
-  if (!g_comp.on || !wnd->surface)
+  if (!g_comp.on)
     {
+      return;
+    }
+
+  if (!wnd->surface)
+    {
+      /* In memory (no room for a surface): in software */
+
+      nxbe_compose_memops(wnd, ops, nops, &dirty);
+      if (!rect_empty(&dirty))
+        {
+          nxbe_compose_damage_wrect(wnd, &dirty);
+        }
+
       return;
     }
 
@@ -1283,23 +2059,50 @@ void nxbe_compose_gpuops(FAR struct nxbe_window_s *wnd,
 }
 
 /****************************************************************************
- * Name: nxbe_compose_due, nxbe_compose_run
+ * Name: nxbe_compose_due, nxbe_compose_wait, nxbe_compose_run
  *
  * Description:
  *   Whether damage has waited long enough to be composited even though
- *   messages are still coming; composite all the damage.
+ *   messages are still coming.  How long until a frame may be composited
+ *   (-1: nothing to composite; 0: now): with two buffers, at most one a
+ *   frame, so that the hardware, which holds everything after a flip
+ *   until the frame starts, is not kept waiting by the next one.
+ *   Composite a frame.
  *
  ****************************************************************************/
 
 bool nxbe_compose_due(void)
 {
-  return g_comp.on && g_comp.ndamage > 0 &&
+  return g_comp.on && (g_comp.ndamage > 0 || g_comp.nmoves > 0) &&
          clock_systime_ticks() - g_comp.since >= NXCOMP_LATENCY;
+}
+
+int nxbe_compose_wait(void)
+{
+  clock_t elapsed;
+
+  if (!g_comp.on || (g_comp.ndamage == 0 && g_comp.nmoves == 0 &&
+                     !(g_comp.retry && !g_comp.dbuf)))
+    {
+      return -1;
+    }
+
+  if (!g_comp.dbuf)
+    {
+      return 0;
+    }
+
+  elapsed = clock_systime_ticks() - g_comp.lastflip;
+  return elapsed >= NXCOMP_FRAME ? 0 : (int)(NXCOMP_FRAME - elapsed);
 }
 
 void nxbe_compose_run(void)
 {
-  struct nxgl_rect_s band;
+  struct nxcomp_copy_s copy[NXCOMP_MAXMOVES];
+  struct nxgl_rect_s redraw[NXCOMP_MAXPREV];
+  struct nxgl_point_s off;
+  int nredraw = 0;
+  int ncopy;
   int i;
 
   if (!g_comp.on)
@@ -1307,17 +2110,59 @@ void nxbe_compose_run(void)
       return;
     }
 
+  if (g_comp.retry && !g_comp.dbuf)
+    {
+      comp_getback();
+    }
+
+  if (g_comp.ndamage == 0 && g_comp.nmoves == 0)
+    {
+      return;
+    }
+
+  /* The moves: what is copied, and what they damage */
+
+  ncopy = comp_moves(copy);
+
+  /* What this frame redraws */
+
   for (i = 0; i < g_comp.ndamage; i++)
     {
-      FAR const struct nxgl_rect_s *d = &g_comp.damage[i];
-      nxgl_coord_t y;
+      redraw[nredraw++] = g_comp.damage[i];
+    }
 
-      for (y = d->pt1.y; y <= d->pt2.y; y += g_comp.bandh)
-        {
-          rect_set(&band, d->pt1.x, y, d->pt2.x,
-                   MIN(d->pt2.y, y + g_comp.bandh - 1));
-          comp_band(&band);
-        }
+  for (i = 0; i < ncopy; i++)
+    {
+      redraw[nredraw++] = copy[i].dest;
+    }
+
+  /* The back buffer: the last frame's changes it lacks, then the moved
+   * windows from where they were, then the damage
+   */
+
+  if (g_comp.dbuf)
+    {
+      comp_age(redraw, nredraw);
+    }
+
+  for (i = 0; i < ncopy; i++)
+    {
+      comp_bufcopy(&copy[i].src, &copy[i].dest);
+    }
+
+  off = g_comp.buf[comp_back()];
+  for (i = 0; i < g_comp.ndamage; i++)
+    {
+      comp_rect(&g_comp.damage[i], &off);
+    }
+
+  /* Show it; the other buffer lacks what it changed */
+
+  if (g_comp.dbuf)
+    {
+      comp_flip(comp_back());
+      memcpy(g_comp.prev, redraw, nredraw * sizeof(redraw[0]));
+      g_comp.nprev = nredraw;
     }
 
   g_comp.ndamage = 0;

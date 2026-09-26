@@ -73,6 +73,23 @@ void nxbe_raise(FAR struct nxbe_window_s *wnd)
       return;
     }
 
+#ifdef CONFIG_NX_COMPOSITOR
+  /* Composited: to the top of its layer (windows of higher layers stay
+   * above it); only if that changes anything is the display out of date
+   * (a framed window is raised at every pointer event with a button down)
+   */
+
+  if (nxbe_compose_on())
+    {
+      if (nxbe_compose_restack(wnd, true))
+        {
+          nxbe_compose_damage_window(wnd);
+        }
+
+      return;
+    }
+#endif
+
   /* This is some non-modal, window above the background.  If we are in a
    * modal state (i.e., there is some other modal window at the top of the
    * heirary), and it is already as high as it can go in the hierarchy, then
@@ -136,11 +153,4 @@ void nxbe_raise(FAR struct nxbe_window_s *wnd)
 
       nxmu_redraw(wnd, &wnd->bounds);
     }
-
-#ifdef CONFIG_NX_COMPOSITOR
-  /* The top of its layer; all it touches is out of date */
-
-  nxbe_compose_restack(wnd, true);
-  nxbe_compose_damage_window(wnd);
-#endif
 }

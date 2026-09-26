@@ -159,7 +159,13 @@ int nxmu_sendclient(FAR struct nxmu_conn_s *conn, FAR const void *msg,
   FAR struct nxmu_pending_s *p;
   int ret;
 
-  DEBUGASSERT(conn != NULL && msg != NULL && msglen <= NX_MXCLIMSGLEN);
+  DEBUGASSERT(conn != NULL && msg != NULL);
+
+  if (msglen > NX_MXCLIMSGLEN)
+    {
+      gerr("ERROR: a %zu-byte message is too long for a client\n", msglen);
+      return -EMSGSIZE;
+    }
 
   nxmutex_lock(&g_pendlock);
   if (conn->npending == 0 || !nxmu_flushconn(conn))

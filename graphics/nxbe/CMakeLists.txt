@@ -60,7 +60,7 @@ if(CONFIG_NX_ACCEL)
 endif()
 
 if(CONFIG_NX_COMPOSITOR)
-  list(APPEND SRCS nxbe_compose.c)
+  list(APPEND SRCS nxbe_compose.c nxbe_compose_mem.c)
 endif()
 
 target_sources(graphics PRIVATE ${SRCS})

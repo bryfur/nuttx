@@ -170,6 +170,27 @@ int nx_compositor(FAR void *handle);
 int nx_displaysize(FAR void *handle, FAR struct nxgl_size_s *size);
 
 /****************************************************************************
+ * Name: nx_getdisplaymode, nx_setdisplaymode
+ *
+ * Description:
+ *   The display modes of the hardware (nx_accel_s getmode): the size of
+ *   mode n (0, 1, ...), or of the current one for n < 0; returns the
+ *   mode's number, -EINVAL past the last, -ENOSYS without modes.
+ *
+ *   Change the display mode (returns its number or a negated errno).  The
+ *   server moves the surfaces out of the way of the new display, damages
+ *   all of it, and tells its clients: every window's position callback
+ *   gets the new display bounds, and one window of each client the event
+ *   NXEVENT_DISPLAYMODE (arg: the mode).  Windows keep their places and
+ *   sizes: it is for the clients to lay them out again.
+ *
+ ****************************************************************************/
+
+int nx_getdisplaymode(FAR void *handle, int mode,
+                      FAR struct nxgl_size_s *size);
+int nx_setdisplaymode(FAR void *handle, int mode);
+
+/****************************************************************************
  * Name: nx_seteffects
  *
  * Description:

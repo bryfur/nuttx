@@ -26,7 +26,9 @@
 
 #include <nuttx/config.h>
 
+#include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 #include <stdlib.h>
 #include <errno.h>
 #include <nuttx/debug.h>
@@ -54,31 +56,30 @@
 
 void nxmu_kbdin(FAR struct nxmu_state_s *nxmu, uint8_t nch, FAR uint8_t *ch)
 {
-  FAR struct nxclimsg_kbdin_s *outmsg;
-  int size;
-  int i;
+  union
+  {
+    struct nxclimsg_kbdin_s msg;
+    uint8_t buf[NX_MXCLIMSGLEN];
+  } out;
 
-  /* Allocate a bigger message to account for the variable amount of
-   * character data.
+  int n;
+
+  /* Only to the top window; in as many messages as fit its client's
+   * queue
    */
 
-  size   = sizeof(struct nxclimsg_kbdin_s) + nch - 1;
-  outmsg = kmm_malloc(size);
-  if (outmsg)
+  while (nch > 0)
     {
-      /* Give the keypad input only to the top child */
+      n = nch < NX_KBDIN_MAXCH ? nch : NX_KBDIN_MAXCH;
+      out.msg.msgid = NX_CLIMSG_KBDIN;
+      out.msg.wnd   = nxmu->be.topwnd;
+      out.msg.nch   = n;
+      memcpy(out.msg.ch, ch, n);
 
-      outmsg->msgid = NX_CLIMSG_KBDIN;
-      outmsg->wnd   = nxmu->be.topwnd;
-      outmsg->nch   = nch;
-
-      for (i = 0; i < nch; i++)
-        {
-          outmsg->ch[i] = ch[i];
-        }
-
-      nxmu_sendclientwindow(nxmu->be.topwnd, outmsg, size);
-      kmm_free(outmsg);
+      nxmu_sendclientwindow(nxmu->be.topwnd, &out.msg,
+                            offsetof(struct nxclimsg_kbdin_s, ch) + n);
+      ch  += n;
+      nch -= n;
     }
 }
 
