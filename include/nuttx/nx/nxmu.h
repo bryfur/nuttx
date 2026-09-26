@@ -29,6 +29,7 @@
 
 #include <nuttx/config.h>
 
+#include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
 #include <mqueue.h>
@@ -60,6 +61,16 @@
 #define NX_MXSVRMSGLEN       (64) /* Maximum size of a client->server command */
 #define NX_MXEVENTLEN        (64) /* Maximum size of an event */
 #define NX_MXCLIMSGLEN       (64) /* Maximum size of a server->client message */
+
+/* The most characters one keyboard message carries, to the server and
+ * from it to the window's client (nx_kbdin() sends more in several)
+ */
+
+#define NX_KBDIN_MAXCH \
+  (NX_MXCLIMSGLEN - (int)offsetof(struct nxclimsg_kbdin_s, ch) < \
+   NX_MXSVRMSGLEN - (int)offsetof(struct nxsvrmsg_kbdin_s, ch) ? \
+   NX_MXCLIMSGLEN - (int)offsetof(struct nxclimsg_kbdin_s, ch) : \
+   NX_MXSVRMSGLEN - (int)offsetof(struct nxsvrmsg_kbdin_s, ch))
 
 /* Message priorities -- they must all be at the same priority to assure
  * FIFO execution.
