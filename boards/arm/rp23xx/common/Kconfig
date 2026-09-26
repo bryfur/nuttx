@@ -182,8 +182,9 @@ endif # RP23XX_SPI0
 if RP23XX_SPI1
 
 config RP23XX_SPI1_RX_GPIO
-	int "GPIO pin for SPI1 RX (8, 12, 24, or 28)"
+	int "GPIO pin for SPI1 RX (8, 12, 24, 28; RP2350B also 40, 44)"
 	default 8
+	range 8 44 if RP23XX_RP2350B
 	range 8 28
 	---help---
 		Refer to board documentation to see which pins are available.
@@ -191,22 +192,25 @@ config RP23XX_SPI1_RX_GPIO
 		SPI master mode, or MOSI when slave mode is configured.
 
 config RP23XX_SPI1_CS_GPIO
-	int "GPIO pin for SPI1 CSn (9, 13, 25, or 29)"
+	int "GPIO pin for SPI1 CSn (any GPIO: driven as a GPIO by the board)"
 	default 9
-	range 9 29
+	range 0 47 if RP23XX_RP2350B
+	range 0 29
 	---help---
 		Refer to board documentation to see which pins are available.
 
 config RP23XX_SPI1_SCK_GPIO
-	int "GPIO pin for SPI1 SCK (10, 14, or 26)"
+	int "GPIO pin for SPI1 SCK (10, 14, 26; RP2350B also 30, 42, 46)"
 	default 10
+	range 10 46 if RP23XX_RP2350B
 	range 10 26
 	---help---
 		Refer to board documentation to see which pins are available.
 
 config RP23XX_SPI1_TX_GPIO
-	int "GPIO pin for SPI1 TX (11, 15, or 27)"
+	int "GPIO pin for SPI1 TX (11, 15, 27; RP2350B also 31, 43, 47)"
 	default 11
+	range 11 47 if RP23XX_RP2350B
 	range 11 27
 	---help---
 		Refer to board documentation to see which pins are available.

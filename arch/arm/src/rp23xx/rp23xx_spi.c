@@ -406,52 +406,71 @@ static uint32_t spi_setfrequency(struct spi_dev_s *dev,
                                  uint32_t frequency)
 {
   struct rp23xx_spidev_s *priv = (struct rp23xx_spidev_s *)dev;
-  uint32_t divisor;
-  uint32_t actual;
+  uint32_t freq_in = BOARD_PERI_FREQ;
+  uint32_t prescale;
+  uint32_t postdiv;
+  uint32_t regval;
 
-  /* Set SPI_CLOCK */
+  /* Nothing to do if the frequency has not changed (drivers such as the
+   * MMC/SD driver set it again every time they take the bus).
+   */
 
-  /* frequency = SPI_CLOCK / divisor, or divisor = SPI_CLOCK / frequency */
-
-  priv->spibasefreq = BOARD_PERI_FREQ;
-  divisor = priv->spibasefreq / frequency;
-
-  /* "In master mode, CPSDVSRmin = 2 or larger (even numbers only)" */
-
-  if (divisor < 2)
+  if (frequency == priv->frequency && priv->actual != 0)
     {
-      divisor = 2;
-    }
-  else if (divisor > 254)
-    {
-      divisor = 254;
+      return priv->actual;
     }
 
-  divisor = (divisor + 1) & ~1;
+  if (frequency == 0)
+    {
+      frequency = 1;
+    }
+
+  priv->spibasefreq = freq_in;
+
+  /* SSPCLKOUT = SSPCLK / (CPSDVSR * (1 + SCR)), CPSDVSR an even prescaler
+   * from 2 to 254, SCR a post-divider from 0 to 255.  As in the Pico SDK:
+   * the smallest prescaler that brings the rate into the post-divider's
+   * range, then the largest post-divider that does not exceed the request.
+   */
+
+  for (prescale = 2; prescale < 254; prescale += 2)
+    {
+      if ((uint64_t)freq_in < (uint64_t)prescale * 256 * frequency)
+        {
+          break;
+        }
+    }
+
+  for (postdiv = 256; postdiv > 1; postdiv--)
+    {
+      if (freq_in / (prescale * (postdiv - 1)) > frequency)
+        {
+          break;
+        }
+    }
 
   /* Disable Spi PrimeCell SSP peripheral */
 
   spi_disable_ssp(dev);
 
-  /* Save the new divisor value */
+  spi_putreg(priv, RP23XX_SPI_SSPCPSR_OFFSET, prescale);
 
-  spi_putreg(priv, RP23XX_SPI_SSPCPSR_OFFSET, divisor);
-
-  /* Calculate the new actual */
-
-  actual = priv->spibasefreq / divisor;
+  regval  = spi_getreg(priv, RP23XX_SPI_SSPCR0_OFFSET);
+  regval &= ~RP23XX_SPI_SSPCR0_SCR_MASK;
+  regval |= (postdiv - 1) << RP23XX_SPI_SSPCR0_SCR_SHIFT;
+  spi_putreg(priv, RP23XX_SPI_SSPCR0_OFFSET, regval);
 
   /* Save the frequency setting */
 
   priv->frequency = frequency;
-  priv->actual    = actual;
+  priv->actual    = freq_in / (prescale * postdiv);
 
   /* Enable Spi PrimeCell SSP peripheral */
 
   spi_enable_ssp(dev);
 
-  spiinfo("Frequency %" PRId32 "->%" PRId32 "\n", frequency, actual);
-  return actual;
+  spiinfo("Frequency %" PRId32 "->%" PRId32 "\n", frequency, priv->actual);
+  return priv->actual;
 }
 
 /****************************************************************************
