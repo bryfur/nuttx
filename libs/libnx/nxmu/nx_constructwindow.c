@@ -108,6 +108,9 @@ int nx_constructwindow(NXHANDLE handle, NXWINDOW hwnd, uint8_t flags,
 #endif
   wnd->stride = 0;
   wnd->fbmem  = NULL;
+#ifdef CONFIG_NX_ACCEL
+  wnd->surface = false;
+#endif
 #endif
 
   /* Request initialization the new window from the server */

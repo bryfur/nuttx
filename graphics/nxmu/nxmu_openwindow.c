@@ -90,6 +90,19 @@ void nxmu_openwindow(FAR struct nxbe_state_s *be,
    * REVISIT:  Assumes a single color plane.
    */
 
+#ifdef CONFIG_NX_ACCEL
+  /* A surface of the display hardware instead of memory, if there is room
+   * (drawing and showing the window are then the hardware's operations).
+   */
+
+  if (NXBE_ISRAMBACKED(wnd) && nxbe_surface_open(wnd))
+    {
+      width       = wnd->bounds.pt2.x - wnd->bounds.pt1.x + 1;
+      wnd->stride = (wnd->be->plane[0].pinfo.bpp * width + 7) >> 3;
+      wnd->fbmem  = NULL;
+    }
+  else
+#endif
   if (NXBE_ISRAMBACKED(wnd))
     {
       width         = wnd->bounds.pt2.x - wnd->bounds.pt1.x + 1;

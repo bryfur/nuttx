@@ -332,6 +332,20 @@ EXTERN FAR const struct nx_accel_s *g_nxaccel;
 void nxbe_accel_install(FAR struct nxbe_plane_s *plane, int display,
                         int planeno);
 void nxbe_accel_flush(void);
+
+/* RAM-backed windows kept in surfaces of the display hardware instead of
+ * memory (nx_accel_s surface_alloc): made, remade at a new size (false:
+ * no room, the surface is gone), freed, and shown (dest in window
+ * coordinates, clipped by the windows above).
+ */
+
+#ifdef CONFIG_NX_RAMBACKED
+bool nxbe_surface_open(FAR struct nxbe_window_s *wnd);
+bool nxbe_surface_resize(FAR struct nxbe_window_s *wnd);
+void nxbe_surface_close(FAR struct nxbe_window_s *wnd);
+void nxbe_surface_present(FAR struct nxbe_window_s *wnd,
+                          FAR const struct nxgl_rect_s *dest);
+#endif
 #endif
 
 /****************************************************************************

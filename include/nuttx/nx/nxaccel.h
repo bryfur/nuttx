@@ -79,6 +79,20 @@ struct nx_accel_s
    */
 
   CODE void (*flush)(void);
+
+  /* Off-screen surfaces, optional (NULL): memory of the display hardware,
+   * outside the display, addressed like it (a rectangle at *pos in the same
+   * coordinates as the operations above).  A RAM-backed window gets one
+   * instead of memory when it can: its drawing becomes the operations
+   * above aimed at its surface, and showing it a move from the surface to
+   * the display.  surface_alloc() returns a negated errno value if there
+   * is no room (the window then uses memory as usual).
+   */
+
+  CODE int  (*surface_alloc)(nxgl_coord_t w, nxgl_coord_t h,
+                             FAR struct nxgl_point_s *pos);
+  CODE void (*surface_free)(FAR const struct nxgl_point_s *pos,
+                            nxgl_coord_t w, nxgl_coord_t h);
 };
 
 /****************************************************************************

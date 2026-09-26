@@ -77,6 +77,16 @@ void nxbe_flush(FAR struct nxbe_window_s *wnd,
                 FAR const struct nxgl_point_s *origin,
                 unsigned int stride)
 {
+#ifdef CONFIG_NX_ACCEL
+  /* A window in a surface: the hardware moves the pixels to the display */
+
+  if (wnd->surface)
+    {
+      nxbe_surface_present(wnd, dest);
+      return;
+    }
+#endif
+
   /* Don't update hidden windows */
 
   if (!NXBE_ISHIDDEN(wnd))

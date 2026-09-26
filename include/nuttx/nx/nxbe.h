@@ -175,6 +175,13 @@ struct nxbe_window_s
   FAR nxgl_mxpixel_t *fbmem;          /* Allocated framebuffer in kernel
                                        * address spaced.  Must be contiguous.
                                        */
+#ifdef CONFIG_NX_ACCEL
+  /* Or, instead of fbmem, a surface of the display hardware (nxaccel.h) */
+
+  bool surface;                       /* The pixels are in the surface */
+  struct nxgl_point_s surfpos;        /* Where the surface is */
+  struct nxgl_size_s surfsize;        /* Its size (the window's, when made) */
+#endif
 #endif
 
   /* Client state information this is provide in window callbacks

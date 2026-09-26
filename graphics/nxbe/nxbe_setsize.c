@@ -104,6 +104,27 @@ static void nxbe_realloc(FAR struct nxbe_window_s *wnd,
       newstride       = (bpp * newwidth + 7) >> 3;
       newfbsize       = newstride * newheight;
 
+#ifdef CONFIG_NX_ACCEL
+      /* A window in a surface of the display hardware gets a surface of
+       * the new size.  If there is no room, it is no longer RAM-backed:
+       * its client is asked to redraw it, as for any other window.
+       */
+
+      if (wnd->surface)
+        {
+          wnd->stride = newstride;
+          if (!nxbe_surface_resize(wnd))
+            {
+              wnd->stride = 0;
+              NXBE_CLRRAMBACKED(wnd);
+              nxmu_redrawreq(wnd, &wnd->bounds);
+              return;
+            }
+
+          goto newterritory;
+        }
+#endif
+
 #ifdef CONFIG_BUILD_KERNEL
       /* Re-allocate memory from the page pool. */
 
@@ -189,6 +210,10 @@ static void nxbe_realloc(FAR struct nxbe_window_s *wnd,
 #endif
       wnd->stride = newstride;
       wnd->fbmem  = newfb;
+
+#ifdef CONFIG_NX_ACCEL
+newterritory:
+#endif
 
       /* If the window became wider, then send a message requesting an update
        * of the new territory on the right.

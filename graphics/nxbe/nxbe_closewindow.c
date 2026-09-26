@@ -121,6 +121,12 @@ void nxbe_closewindow(FAR struct nxbe_window_s *wnd)
     }
 
 #ifdef CONFIG_NX_RAMBACKED
+#ifdef CONFIG_NX_ACCEL
+  /* Or the surface of the display hardware */
+
+  nxbe_surface_close(wnd);
+#endif
+
   /* Free any allocated, per-window framebuffer */
 
   if (wnd->fbmem != NULL)
