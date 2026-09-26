@@ -1391,10 +1391,10 @@ int hostfs_rename(FAR struct inode *mountpt, FAR const char *oldrelpath,
 
   /* Append to the host's root directory */
 
-  strlcpy(oldpath, fs->fs_root, sizeof(oldpath));
-  strlcat(oldpath, oldrelpath, sizeof(oldpath));
-  strlcpy(newpath, fs->fs_root, sizeof(newpath));
-  strlcat(newpath, newrelpath, sizeof(newpath));
+  strlcpy(oldpath, fs->fs_root, HOSTFS_MAX_PATH);
+  strlcat(oldpath, oldrelpath, HOSTFS_MAX_PATH);
+  strlcpy(newpath, fs->fs_root, HOSTFS_MAX_PATH);
+  strlcat(newpath, newrelpath, HOSTFS_MAX_PATH);
 
   /* Call the host FS to do the mkdir */
 
