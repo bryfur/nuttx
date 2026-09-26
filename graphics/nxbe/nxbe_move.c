@@ -297,6 +297,103 @@ static inline void nxbe_move_dev(FAR struct nxbe_window_s *wnd,
 }
 
 /****************************************************************************
+ * Name: nxbe_flush_part
+ *
+ * Description:
+ *   Copy an area (absolute coordinates) of a RAM-backed window from its
+ *   memory to the display.
+ *
+ ****************************************************************************/
+
+#if defined(CONFIG_NX_RAMBACKED) && !defined(CONFIG_NX_SWCURSOR)
+static void nxbe_flush_part(FAR struct nxbe_window_s *wnd,
+                            FAR const struct nxgl_rect_s *part)
+{
+  FAR const void *src[CONFIG_NX_NPLANES];
+  struct nxgl_point_s origin;
+  struct nxgl_rect_s rel;
+
+  src[0]   = wnd->fbmem;
+  origin.x = 0;
+  origin.y = 0;
+  nxgl_rectoffset(&rel, part, -wnd->bounds.pt1.x, -wnd->bounds.pt1.y);
+  nxbe_flush(wnd, &rel, src, &origin, wnd->stride);
+}
+
+/****************************************************************************
+ * Name: nxbe_move_pwfbtop
+ *
+ * Description:
+ *   The display side of a move within a RAM-backed window that nothing
+ *   covers (its memory has been moved already): move what is on the
+ *   display with moverectangle, then copy from the window's memory the
+ *   part of the destination that the move did not fill (what was off the
+ *   display, or outside the source).
+ *
+ * Input Parameters:
+ *   wnd    - The window
+ *   rect   - The source, absolute, clipped to the window and the display
+ *   offset - The offset of the move
+ *
+ ****************************************************************************/
+
+static void nxbe_move_pwfbtop(FAR struct nxbe_window_s *wnd,
+                              FAR const struct nxgl_rect_s *rect,
+                              FAR const struct nxgl_point_s *offset)
+{
+  FAR struct nxbe_state_s *be = wnd->be;
+  struct nxgl_rect_s part[4];
+  struct nxgl_rect_s dst;
+  struct nxgl_rect_s src;
+  struct nxgl_rect_s moved;
+  int i;
+
+  /* The destination, on the display and in the window */
+
+  nxgl_rectoffset(&dst, rect, offset->x, offset->y);
+  nxgl_rectintersect(&dst, &dst, &wnd->bounds);
+  nxgl_rectintersect(&dst, &dst, &be->bkgd.bounds);
+  if (nxgl_nullrect(&dst))
+    {
+      return;
+    }
+
+  /* The part of it whose source is on the display */
+
+  nxgl_rectoffset(&src, &dst, -offset->x, -offset->y);
+  nxgl_rectintersect(&src, &src, rect);
+  if (nxgl_nullrect(&src))
+    {
+      nxbe_flush_part(wnd, &dst);
+      return;
+    }
+
+  nxgl_rectoffset(&moved, &src, offset->x, offset->y);
+  for (i = 0; i < be->vinfo.nplanes; i++)
+    {
+      FAR struct nxbe_plane_s *plane = &be->plane[i];
+
+      plane->dev.moverectangle(&plane->pinfo, &src,
+                               (FAR struct nxgl_point_s *)offset);
+#ifdef CONFIG_NX_UPDATE
+      nxbe_notify_rectangle(plane->driver, &moved);
+#endif
+    }
+
+  /* The rest of the destination from the window's memory */
+
+  nxgl_nonintersecting(part, &dst, &moved);
+  for (i = 0; i < 4; i++)
+    {
+      if (!nxgl_nullrect(&part[i]))
+        {
+          nxbe_flush_part(wnd, &part[i]);
+        }
+    }
+}
+#endif
+
+/****************************************************************************
  * Name: nxbe_move_pwfb
  *
  * Description:
@@ -395,6 +492,19 @@ static inline void nxbe_move_pwfb(FAR struct nxbe_window_s *wnd,
       default:
         break;
     }
+
+#ifndef CONFIG_NX_SWCURSOR
+  /* A window that nothing covers shows its pixels on the display already:
+   * move them there too, and copy from the window's memory only what that
+   * does not bring (a terminal's scroll becomes one move and a line).
+   */
+
+  if (wnd->above == NULL && !NXBE_ISHIDDEN(wnd))
+    {
+      nxbe_move_pwfbtop(wnd, rect, offset);
+      return;
+    }
+#endif
 
   /* Update the physical device by just copying the rectangle from the
    * framebuffer to the destination rectangle device graphics memory.
