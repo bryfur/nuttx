@@ -37,6 +37,7 @@
 #include <time.h>
 #include <nuttx/debug.h>
 
+#include <nuttx/clock.h>
 #include <nuttx/mqueue.h>
 #include <nuttx/signal.h>
 #include <nuttx/nx/nx.h>
@@ -75,10 +76,11 @@ static void nxmu_accel_idle(mqd_t mqd)
 
 #ifdef CONFIG_NX_COMPOSITOR
   /* Composite what has changed: when nothing more is coming, or when it
-   * has waited long enough in a stream of messages
+   * has waited long enough in a stream of messages; and not before the
+   * frame is due (nxbe_compose_wait())
    */
 
-  if (idle || nxbe_compose_due())
+  if ((idle || nxbe_compose_due()) && nxbe_compose_wait() == 0)
     {
       nxbe_compose_run();
       idle = true;
@@ -219,6 +221,97 @@ static void nxmu_event(FAR struct nxbe_window_s *wnd, enum nx_event_e event,
 }
 
 /****************************************************************************
+ * Name: nxmu_displaymode
+ *
+ * Description:
+ *   Get or change the display mode (nx_setdisplaymode()).  A change: the
+ *   compositor gives up its second buffer, the hardware changes mode, the
+ *   surfaces the display now covers move elsewhere, the display's size
+ *   (vinfo, the background, the pointer's range) follows, all of it is
+ *   composited again, and the clients are told: every window's new
+ *   position report carries the display's bounds, and one window of each
+ *   client gets NXEVENT_DISPLAYMODE.
+ *
+ ****************************************************************************/
+
+#ifdef CONFIG_NX_COMPOSITOR
+static int nxmu_displaymode(FAR struct nxmu_state_s *nxmu, int mode,
+                            bool set, FAR struct nxgl_size_s *size)
+{
+  FAR struct nxbe_state_s *be = &nxmu->be;
+  FAR struct nxmu_conn_s *told[8];
+  FAR struct nxbe_window_s *wnd;
+  struct nxgl_size_s cursize;
+  int ntold = 0;
+  int cur;
+  int ret;
+  int i;
+
+  if (g_nxaccel == NULL || g_nxaccel->getmode == NULL)
+    {
+      return -ENOSYS;
+    }
+
+  ret = g_nxaccel->getmode(mode, size);
+  if (ret < 0 || !set)
+    {
+      return ret;
+    }
+
+  mode = ret;
+  cur  = g_nxaccel->getmode(-1, &cursize);
+  if (mode == cur || g_nxaccel->setmode == NULL)
+    {
+      return mode == cur ? mode : -ENOSYS;
+    }
+
+  nxbe_compose_setmode(true);
+  ret = g_nxaccel->setmode(mode);
+  if (ret < 0)
+    {
+      nxbe_compose_setmode(false);
+      return ret;
+    }
+
+  be->vinfo.xres        = size->w;
+  be->vinfo.yres        = size->h;
+  be->bkgd.bounds.pt2.x = size->w - 1;
+  be->bkgd.bounds.pt2.y = size->h - 1;
+#ifdef CONFIG_NX_RAMBACKED
+  nxbe_surface_evacuate(&be->bkgd.bounds);
+#endif
+#ifdef CONFIG_NX_XYINPUT
+  nxmu_mouserange(size->w, size->h);
+#endif
+  nxbe_compose_setmode(false);
+
+  for (wnd = be->topwnd; wnd != NULL; wnd = wnd->below)
+    {
+      if (wnd == &be->bkgd)
+        {
+          continue;
+        }
+
+      nxmu_reportposition(wnd);
+      for (i = 0; i < ntold && told[i] != wnd->conn; i++)
+        {
+        }
+
+      if (i == ntold)
+        {
+          nxmu_event(wnd, NXEVENT_DISPLAYMODE, (FAR void *)(uintptr_t)mode);
+          if (ntold < (int)(sizeof(told) / sizeof(told[0])))
+            {
+              told[ntold++] = wnd->conn;
+            }
+        }
+    }
+
+  return mode;
+}
+#endif
+
+/****************************************************************************
  * Name: nxmu_setup
  ****************************************************************************/
 
@@ -341,6 +434,10 @@ int nx_runinstance(FAR const char *mqname, FAR NX_DRIVERTYPE *dev)
   FAR struct nxsvrmsg_s *msg;
   char                   buffer[NX_MXSVRMSGLEN];
   int                    nbytes;
+  int                    waitms;
+#ifdef CONFIG_NX_COMPOSITOR
+  int                    ticks;
+#endif
   int                    ret;
 
   /* Initialization *********************************************************/
@@ -371,15 +468,28 @@ int nx_runinstance(FAR const char *mqname, FAR NX_DRIVERTYPE *dev)
 
       /* Send what clients had no room for, then receive the next server
        * message; while anything is still held, wait no more than
-       * NXMU_FLUSH_MS for one, so it goes out as room comes.
+       * NXMU_FLUSH_MS for one, so it goes out as room comes (nor longer
+       * than a frame of the compositor's has to wait).
        */
 
-      if (nxmu_flushclients())
+      waitms = nxmu_flushclients() ? NXMU_FLUSH_MS : -1;
+
+#ifdef CONFIG_NX_COMPOSITOR
+      /* A frame waiting for its time: no longer than that */
+
+      ticks = nxbe_compose_wait();
+      if (ticks > 0 && (waitms < 0 || TICK2MSEC(ticks) < waitms))
+        {
+          waitms = TICK2MSEC(ticks);
+        }
+#endif
+
+      if (waitms >= 0)
         {
           struct timespec abstime;
 
           clock_gettime(CLOCK_REALTIME, &abstime);
-          abstime.tv_nsec += NXMU_FLUSH_MS * 1000000;
+          abstime.tv_nsec += waitms * 1000000;
           if (abstime.tv_nsec >= 1000000000)
             {
               abstime.tv_sec++;
@@ -713,15 +823,26 @@ int nx_runinstance(FAR const char *mqname, FAR NX_DRIVERTYPE *dev)
             }
             break;
 
+          case NX_SVRMSG_DISPLAYMODE: /* Get or set the display mode */
+            {
+              FAR struct nxsvrmsg_displaymode_s *modemsg =
+                (FAR struct nxsvrmsg_displaymode_s *)buffer;
+              *modemsg->result = nxmu_displaymode(&nxmu, modemsg->mode,
+                                                  modemsg->set,
+                                                  modemsg->size);
+              nxsem_post(modemsg->sem_done);
+            }
+            break;
+
           case NX_SVRMSG_SETLUT: /* Load a shape table */
             {
               FAR struct nxsvrmsg_setlut_s *lutmsg =
                 (FAR struct nxsvrmsg_setlut_s *)buffer;
               if (nxbe_compose_on())
                 {
-                  g_nxaccel->set_lut(lutmsg->slot,
-                                     (FAR const uint8_t (*)[NX_BLEND_LUT_N])
-                                     lutmsg->lut);
+                  nxbe_compose_setlut(lutmsg->slot,
+                                      (FAR const uint8_t (*)[NX_BLEND_LUT_N])
+                                      lutmsg->lut);
                 }
 
               nxsem_post(lutmsg->sem_done);

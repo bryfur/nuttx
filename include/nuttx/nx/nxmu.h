@@ -161,7 +161,8 @@ enum nxmsg_e
   NX_SVRMSG_SETEFFECTS,       /* Window effects and layer */
   NX_SVRMSG_SETDLIST,         /* A layer window's display list */
   NX_SVRMSG_GPUOPS,           /* Operations of the display hardware */
-  NX_SVRMSG_SETLUT            /* Load a shape table */
+  NX_SVRMSG_SETLUT,           /* Load a shape table */
+  NX_SVRMSG_DISPLAYMODE       /* Get or set the display mode */
 };
 
 /* Server-to-Client Message Structures **************************************/
@@ -574,6 +575,16 @@ struct nxsvrmsg_setlut_s
   uint32_t msgid;                  /* NX_SVRMSG_SETLUT */
   int slot;
   FAR const uint8_t *lut;          /* NX_BLEND_LUT_N x NX_BLEND_LUT_N */
+  FAR sem_t *sem_done;
+};
+
+struct nxsvrmsg_displaymode_s
+{
+  uint32_t msgid;                  /* NX_SVRMSG_DISPLAYMODE */
+  int mode;                        /* Which (< 0: the current one) */
+  bool set;                        /* Change to it */
+  FAR int *result;                 /* Its number, or a negated errno */
+  FAR struct nxgl_size_s *size;    /* Its size */
   FAR sem_t *sem_done;
 };
 #endif

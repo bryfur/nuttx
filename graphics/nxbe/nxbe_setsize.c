@@ -112,17 +112,78 @@ static void nxbe_realloc(FAR struct nxbe_window_s *wnd,
 
       if (wnd->surface)
         {
+          bool lost;
+
           wnd->stride = newstride;
-          if (!nxbe_surface_resize(wnd))
+          if (nxbe_surface_resize(wnd, &lost))
             {
-              wnd->stride = 0;
-              NXBE_CLRRAMBACKED(wnd);
+              if (lost)
+                {
+                  nxmu_redrawreq(wnd, &wnd->bounds);
+                  return;
+                }
+
+              goto newterritory;
+            }
+
+#ifndef CONFIG_BUILD_KERNEL
+          /* No room: in memory, drawn again by its client */
+
+          wnd->fbmem = kumm_zalloc(newfbsize);
+          if (wnd->fbmem != NULL)
+            {
               nxmu_redrawreq(wnd, &wnd->bounds);
               return;
             }
+#endif
 
+          wnd->stride = 0;
+          NXBE_CLRRAMBACKED(wnd);
+          nxmu_redrawreq(wnd, &wnd->bounds);
+          return;
+        }
+
+#ifndef CONFIG_BUILD_KERNEL
+      /* In memory (there was no room for a surface): into one, if there
+       * is room now, with the content it had
+       */
+
+      if (wnd->fbmem != NULL && nxbe_surface_open(wnd))
+        {
+          struct nxgl_rect_s rect;
+          struct nxgl_rect_s zero;
+
+          rect.pt1   = wnd->surfpos;
+          rect.pt2.x = wnd->surfpos.x + MIN(oldwidth, newwidth) - 1;
+          rect.pt2.y = wnd->surfpos.y + MIN(oldheight, newheight) - 1;
+          g_nxaccel->copy(&rect, wnd->fbmem, &wnd->surfpos, wnd->stride);
+
+          zero.pt1.x = wnd->surfpos.x;
+          zero.pt1.y = wnd->surfpos.y;
+          zero.pt2.x = wnd->surfpos.x + newwidth - 1;
+          zero.pt2.y = wnd->surfpos.y + newheight - 1;
+          if (newwidth > oldwidth)
+            {
+              struct nxgl_rect_s r = zero;
+
+              r.pt1.x = rect.pt2.x + 1;
+              g_nxaccel->fill(&r, 0);
+            }
+
+          if (newheight > oldheight)
+            {
+              struct nxgl_rect_s r = zero;
+
+              r.pt1.y = rect.pt2.y + 1;
+              g_nxaccel->fill(&r, 0);
+            }
+
+          kumm_free(wnd->fbmem);
+          wnd->fbmem  = NULL;
+          wnd->stride = newstride;
           goto newterritory;
         }
+#endif
 #endif
 
 #ifdef CONFIG_BUILD_KERNEL

@@ -30,9 +30,11 @@
 #include <sys/param.h>
 #include <fixedmath.h>
 
+#include <nuttx/kmalloc.h>
 #include <nuttx/nx/nxaccel.h>
 
 #include "nxbe.h"
+#include "nxmu.h"
 
 /****************************************************************************
  * Public Data
@@ -52,6 +54,10 @@ FAR const struct nx_accel_s *g_nxaccel;
  */
 
 static struct nxbe_pwfb_vtable_s g_pwfb_ram;
+
+/* The windows that have surfaces, hidden ones too */
+
+static FAR struct nxbe_window_s *g_surfwnds;
 #endif
 
 /****************************************************************************
@@ -366,6 +372,38 @@ static void pwfb_copyrectangle(FAR struct nxbe_window_s *wnd,
   g_nxaccel->copy(&abs, src, &org, srcstride);
 }
 
+/* The list of windows with surfaces */
+
+static void surf_link(FAR struct nxbe_window_s *wnd)
+{
+  FAR struct nxbe_window_s *w;
+
+  for (w = g_surfwnds; w != NULL; w = w->surfnext)
+    {
+      if (w == wnd)
+        {
+          return;
+        }
+    }
+
+  wnd->surfnext = g_surfwnds;
+  g_surfwnds    = wnd;
+}
+
+static void surf_unlink(FAR struct nxbe_window_s *wnd)
+{
+  FAR struct nxbe_window_s **pp;
+
+  for (pp = &g_surfwnds; *pp != NULL; pp = &(*pp)->surfnext)
+    {
+      if (*pp == wnd)
+        {
+          *pp = wnd->surfnext;
+          return;
+        }
+    }
+}
+
 /* Showing a surface: a move from it to each visible part of the display */
 
 struct surf_present_s
@@ -470,15 +508,93 @@ void nxbe_accel_flush(void)
  *
  ****************************************************************************/
 
-bool nxbe_surface_open(FAR struct nxbe_window_s *wnd)
+/* Every surface as far up, then left, as it will go, from the top down:
+ * the room between them comes together below them.  Each is one copy,
+ * which may overlap where it was.
+ */
+
+static void surf_compact(void)
 {
+  FAR struct nxbe_window_s **order;
+  FAR struct nxbe_window_s *wnd;
+  int n = 0;
+  int i;
+  int j;
+
+  for (wnd = g_surfwnds; wnd != NULL; wnd = wnd->surfnext)
+    {
+      n++;
+    }
+
+  order = kmm_malloc(n * sizeof(*order));
+  if (order == NULL)
+    {
+      return;
+    }
+
+  for (i = 0, wnd = g_surfwnds; wnd != NULL; wnd = wnd->surfnext)
+    {
+      /* In order of place: lowest y, then lowest x */
+
+      for (j = i++; j > 0 &&
+           (order[j - 1]->surfpos.y > wnd->surfpos.y ||
+            (order[j - 1]->surfpos.y == wnd->surfpos.y &&
+             order[j - 1]->surfpos.x > wnd->surfpos.x)); j--)
+        {
+          order[j] = order[j - 1];
+        }
+
+      order[j] = wnd;
+    }
+
+  for (i = 0; i < n; i++)
+    {
+      if (order[i]->surface && !nxbe_surface_relocate(order[i]))
+        {
+          /* Lost (it was just freed, so there was room): as for a
+           * display mode, in memory
+           */
+
+          nxbe_surface_tomemory(order[i]);
+        }
+    }
+
+  kmm_free(order);
+}
+
+static bool surf_open(FAR struct nxbe_window_s *wnd, bool reclaim)
+{
+  bool compacted = false;
   struct nxgl_point_s pos;
   nxgl_coord_t w = wnd->bounds.pt2.x - wnd->bounds.pt1.x + 1;
   nxgl_coord_t h = wnd->bounds.pt2.y - wnd->bounds.pt1.y + 1;
 
   if (g_nxaccel == NULL || g_nxaccel->surface_alloc == NULL ||
-      w <= 0 || h <= 0 || g_nxaccel->surface_alloc(w, h, &pos) < 0)
+      w <= 0 || h <= 0)
     {
+      return false;
+    }
+
+  while (g_nxaccel->surface_alloc(w, h, &pos) < 0)
+    {
+#ifdef CONFIG_NX_COMPOSITOR
+      /* Windows first: the compositor's second display buffer makes room */
+
+      if (reclaim && nxbe_compose_reclaim())
+        {
+          continue;
+        }
+#endif
+
+      /* Then the room there is, together */
+
+      if (reclaim && !compacted && g_surfwnds != NULL)
+        {
+          surf_compact();
+          compacted = true;
+          continue;
+        }
+
       return false;
     }
 
@@ -486,7 +602,13 @@ bool nxbe_surface_open(FAR struct nxbe_window_s *wnd)
   wnd->surfpos    = pos;
   wnd->surfsize.w = w;
   wnd->surfsize.h = h;
+  surf_link(wnd);
   return true;
+}
+
+bool nxbe_surface_open(FAR struct nxbe_window_s *wnd)
+{
+  return surf_open(wnd, true);
 }
 
 /****************************************************************************
@@ -500,6 +622,10 @@ void nxbe_surface_close(FAR struct nxbe_window_s *wnd)
       g_nxaccel->surface_free(&wnd->surfpos, wnd->surfsize.w,
                               wnd->surfsize.h);
       wnd->surface = false;
+      surf_unlink(wnd);
+#ifdef CONFIG_NX_COMPOSITOR
+      nxbe_compose_freed();
+#endif
     }
 }
 
@@ -508,25 +634,47 @@ void nxbe_surface_close(FAR struct nxbe_window_s *wnd)
  *
  * Description:
  *   The window's size has changed: a surface of the new size with what
- *   the old one had where both overlap (zero elsewhere).
+ *   the old one had where both overlap (zero elsewhere).  If there is no
+ *   room for both, the old one goes first, and its content with it (all
+ *   zero, *lost is set); the compositor's second display buffer is given
+ *   up only if that is not enough.
  *
  * Returned Value:
  *   false if there is no room: the window has no surface any more.
  *
  ****************************************************************************/
 
-bool nxbe_surface_resize(FAR struct nxbe_window_s *wnd)
+bool nxbe_surface_resize(FAR struct nxbe_window_s *wnd, FAR bool *lost)
 {
   struct nxgl_point_s oldpos = wnd->surfpos;
   struct nxgl_size_s oldsize = wnd->surfsize;
   struct nxgl_point_s offset;
   struct nxgl_rect_s rect;
 
+  /* A new one beside the old, else in the old one's place too, else with
+   * the compositor's second display buffer's room
+   */
+
+  *lost = false;
   wnd->surface = false;
-  if (!nxbe_surface_open(wnd))
+  if (!surf_open(wnd, false))
     {
       g_nxaccel->surface_free(&oldpos, oldsize.w, oldsize.h);
-      return false;
+#ifdef CONFIG_NX_COMPOSITOR
+      nxbe_compose_freed();
+#endif
+      if (!surf_open(wnd, false) && !surf_open(wnd, true))
+        {
+          surf_unlink(wnd);
+          return false;
+        }
+
+      rect.pt1   = wnd->surfpos;
+      rect.pt2.x = wnd->surfpos.x + wnd->surfsize.w - 1;
+      rect.pt2.y = wnd->surfpos.y + wnd->surfsize.h - 1;
+      g_nxaccel->fill(&rect, 0);
+      *lost = true;
+      return true;
     }
 
   /* The old content, as much as fits */
@@ -559,7 +707,131 @@ bool nxbe_surface_resize(FAR struct nxbe_window_s *wnd)
     }
 
   g_nxaccel->surface_free(&oldpos, oldsize.w, oldsize.h);
+#ifdef CONFIG_NX_COMPOSITOR
+  nxbe_compose_freed();
+#endif
   return true;
+}
+
+/****************************************************************************
+ * Name: nxbe_surface_relocate
+ *
+ * Description:
+ *   Move a window's surface out of the way of rectangle keep (the display,
+ *   grown by a display mode): a new surface elsewhere and one copy.
+ *
+ * Returned Value:
+ *   false if there is no room elsewhere: the window has no surface any
+ *   more (nor its content).
+ *
+ ****************************************************************************/
+
+bool nxbe_surface_relocate(FAR struct nxbe_window_s *wnd)
+{
+  struct nxgl_point_s oldpos = wnd->surfpos;
+  struct nxgl_size_s oldsize = wnd->surfsize;
+  struct nxgl_point_s offset;
+  struct nxgl_point_s pos;
+  struct nxgl_rect_s rect;
+
+  /* The new place may overlap the old one (the copy works as if through
+   * a buffer), not any other
+   */
+
+  g_nxaccel->surface_free(&oldpos, oldsize.w, oldsize.h);
+  if (g_nxaccel->surface_alloc(oldsize.w, oldsize.h, &pos) < 0)
+    {
+      wnd->surface = false;
+      surf_unlink(wnd);
+      return false;
+    }
+
+  rect.pt1   = oldpos;
+  rect.pt2.x = oldpos.x + oldsize.w - 1;
+  rect.pt2.y = oldpos.y + oldsize.h - 1;
+  offset.x   = pos.x - oldpos.x;
+  offset.y   = pos.y - oldpos.y;
+  g_nxaccel->move(&rect, &offset);
+  wnd->surfpos = pos;
+  return true;
+}
+
+/****************************************************************************
+ * Name: nxbe_surface_evacuate
+ *
+ * Description:
+ *   The display has grown over keep (a display mode): move every surface
+ *   out of it, the largest first.  A window whose surface finds no room
+ *   elsewhere goes to memory, and its client is asked to draw it again.
+ *
+ ****************************************************************************/
+
+void nxbe_surface_evacuate(FAR const struct nxgl_rect_s *keep)
+{
+  FAR struct nxbe_window_s *wnd;
+  FAR struct nxbe_window_s *big;
+  struct nxgl_rect_s r;
+  int32_t area;
+  int32_t a;
+
+  for (; ; )
+    {
+      big  = NULL;
+      area = 0;
+      for (wnd = g_surfwnds; wnd != NULL; wnd = wnd->surfnext)
+        {
+          r.pt1   = wnd->surfpos;
+          r.pt2.x = wnd->surfpos.x + wnd->surfsize.w - 1;
+          r.pt2.y = wnd->surfpos.y + wnd->surfsize.h - 1;
+          a       = (int32_t)wnd->surfsize.w * wnd->surfsize.h;
+          if (nxgl_rectoverlap(&r, (FAR struct nxgl_rect_s *)keep) &&
+              a > area)
+            {
+              big  = wnd;
+              area = a;
+            }
+        }
+
+      if (big == NULL)
+        {
+          return;
+        }
+
+      if (nxbe_surface_relocate(big))
+        {
+          continue;
+        }
+
+      nxbe_surface_tomemory(big);
+    }
+}
+
+/****************************************************************************
+ * Name: nxbe_surface_tomemory
+ *
+ * Description:
+ *   A window whose surface is gone (no room for it where it had to move):
+ *   in memory, all zero, and its client is asked to draw it again.
+ *
+ ****************************************************************************/
+
+void nxbe_surface_tomemory(FAR struct nxbe_window_s *wnd)
+{
+  nxgl_coord_t w = wnd->bounds.pt2.x - wnd->bounds.pt1.x + 1;
+  nxgl_coord_t h = wnd->bounds.pt2.y - wnd->bounds.pt1.y + 1;
+
+  gwarn("WARNING: no room for a %dx%d surface: in memory\n", w, h);
+#ifndef CONFIG_BUILD_KERNEL
+  wnd->stride = (wnd->be->plane[0].pinfo.bpp * w + 7) >> 3;
+  wnd->fbmem  = kumm_zalloc((size_t)wnd->stride * h);
+#endif
+  if (wnd->fbmem == NULL)
+    {
+      wnd->stride = 0;
+      NXBE_CLRRAMBACKED(wnd);
+    }
+
+  nxmu_redrawreq(wnd, &wnd->bounds);
 }
 
 /****************************************************************************

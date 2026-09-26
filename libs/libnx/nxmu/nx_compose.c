@@ -100,6 +100,35 @@ int nx_displaysize(NXHANDLE handle, FAR struct nxgl_size_s *size)
   return ret < 0 ? ret : OK;
 }
 
+static int nx_displaymode(NXHANDLE handle, int mode, bool set,
+                          FAR struct nxgl_size_s *size)
+{
+  struct nxsvrmsg_displaymode_s msg;
+  struct nxgl_size_s dummy;
+  int result = -ENOSYS;
+  int ret;
+
+  msg.msgid  = NX_SVRMSG_DISPLAYMODE;
+  msg.mode   = mode;
+  msg.set    = set;
+  msg.result = &result;
+  msg.size   = size != NULL ? size : &dummy;
+  ret = nx_compose_wait((FAR struct nxmu_conn_s *)handle, NULL, &msg,
+                        sizeof(msg), &msg.sem_done);
+  return ret < 0 ? ret : result;
+}
+
+int nx_getdisplaymode(NXHANDLE handle, int mode,
+                      FAR struct nxgl_size_s *size)
+{
+  return nx_displaymode(handle, mode, false, size);
+}
+
+int nx_setdisplaymode(NXHANDLE handle, int mode)
+{
+  return nx_displaymode(handle, mode, true, NULL);
+}
+
 int nx_seteffects(NXWINDOW hwnd, FAR const struct nx_effects_s *fx)
 {
   struct nxsvrmsg_seteffects_s msg;
