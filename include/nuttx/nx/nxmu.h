@@ -33,6 +33,7 @@
 #include <stdbool.h>
 #include <mqueue.h>
 
+#include <nuttx/queue.h>
 #include <nuttx/semaphore.h>
 #include <nuttx/nx/nx.h>
 #include <nuttx/nx/nxcursor.h>
@@ -98,7 +99,18 @@ struct nxmu_conn_s
 
   /* These are only usable on the server side of the connection */
 
-  mqd_t swrmq;            /* MQ to write to the client */
+  mqd_t swrmq;            /* MQ to write to the client (non-blocking) */
+
+  /* Messages the client's MQ had no room for, oldest first, and the link
+   * in the server's list of connections that have some (nxmu_sendclient.c).
+   * The server must never wait for a client: the client may itself be
+   * waiting for room in the server's MQ.
+   */
+
+  sq_queue_t pending;
+  uint16_t npending;
+  bool listed;
+  FAR struct nxmu_conn_s *pnext;
 };
 
 /* Message IDs **************************************************************/

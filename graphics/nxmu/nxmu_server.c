@@ -34,12 +34,24 @@
 #include <fcntl.h>
 #include <assert.h>
 #include <errno.h>
+#include <time.h>
 #include <nuttx/debug.h>
 
 #include <nuttx/mqueue.h>
+#include <nuttx/signal.h>
 #include <nuttx/nx/nx.h>
 
 #include "nxmu.h"
+
+/****************************************************************************
+ * Pre-processor Definitions
+ ****************************************************************************/
+
+/* While messages are held for clients (nxmu_sendclient.c), the longest the
+ * server waits for a message of its own before trying them again.
+ */
+
+#define NXMU_FLUSH_MS 10
 
 /****************************************************************************
  * Private Functions
@@ -52,17 +64,38 @@
 static inline void nxmu_disconnect(FAR struct nxmu_conn_s *conn)
 {
   struct nxclimsg_disconnected_s outmsg;
+  int retries;
   int ret;
 
-  /* Send the handshake message back to the client */
+  /* Nothing held for it goes out now: the client frees the connection
+   * once it has the handshake below.
+   */
+
+  nxmu_dropclient(conn);
+
+  /* Send the handshake message back to the client.  It is waiting for it,
+   * reading its MQ, so room comes; give up after a second (a client that
+   * has gone without reading).
+   */
 
   outmsg.msgid = NX_CLIMSG_DISCONNECTED;
 
-  ret = nxmu_sendclient(conn, &outmsg,
-                        sizeof(struct nxclimsg_disconnected_s));
+  for (retries = 0; retries < 1000; retries++)
+    {
+      ret = nxmq_send(conn->swrmq, (FAR const char *)&outmsg,
+                      sizeof(struct nxclimsg_disconnected_s),
+                      NX_CLIMSG_PRIO);
+      if (ret != -EAGAIN)
+        {
+          break;
+        }
+
+      nxsig_usleep(1000);
+    }
+
   if (ret < 0)
     {
-      gerr("ERROR: nxmu_sendclient failed: %d\n", ret);
+      gerr("ERROR: nxmq_send failed: %d\n", ret);
     }
 
   /* Close the outgoing client message queue */
@@ -88,7 +121,7 @@ static inline void nxmu_connect(FAR struct nxmu_conn_s *conn)
    * client
    */
 
-  conn->swrmq = nxmq_open(mqname, O_WRONLY);
+  conn->swrmq = nxmq_open(mqname, O_WRONLY | O_NONBLOCK);
   if (conn->swrmq < 0)
     {
       gerr("ERROR: nxmq_open(%s) failed: %d\n", mqname, conn->swrmq);
@@ -208,7 +241,7 @@ static inline int nxmu_setup(FAR const char *mqname, FAR NX_DRIVERTYPE *dev,
    * the server message loop.
    */
 
-  nxmu->conn.swrmq = nxmq_open(mqname, O_WRONLY);
+  nxmu->conn.swrmq = nxmq_open(mqname, O_WRONLY | O_NONBLOCK);
   if (nxmu->conn.swrmq < 0)
     {
       gerr("ERROR: nxmq_open(%s) failed: %d\n", mqname, nxmu->conn.swrmq);
@@ -297,9 +330,36 @@ int nx_runinstance(FAR const char *mqname, FAR NX_DRIVERTYPE *dev)
 
   for (; ; )
     {
-      /* Receive the next server message */
+      /* Send what clients had no room for, then receive the next server
+       * message; while anything is still held, wait no more than
+       * NXMU_FLUSH_MS for one, so it goes out as room comes.
+       */
 
-      nbytes = nxmq_receive(nxmu.conn.crdmq, buffer, NX_MXSVRMSGLEN, 0);
+      if (nxmu_flushclients())
+        {
+          struct timespec abstime;
+
+          clock_gettime(CLOCK_REALTIME, &abstime);
+          abstime.tv_nsec += NXMU_FLUSH_MS * 1000000;
+          if (abstime.tv_nsec >= 1000000000)
+            {
+              abstime.tv_sec++;
+              abstime.tv_nsec -= 1000000000;
+            }
+
+          nbytes = nxmq_timedreceive(nxmu.conn.crdmq, buffer,
+                                     NX_MXSVRMSGLEN, 0, &abstime);
+          if (nbytes == -ETIMEDOUT)
+            {
+              continue;
+            }
+        }
+      else
+        {
+          nbytes = nxmq_receive(nxmu.conn.crdmq, buffer, NX_MXSVRMSGLEN,
+                                0);
+        }
+
       if (nbytes < 0)
         {
           if (nbytes != -EINTR)

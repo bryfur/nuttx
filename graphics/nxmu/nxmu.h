@@ -105,6 +105,27 @@ int nxmu_sendclient(FAR struct nxmu_conn_s *conn,
                     FAR const void *msg, size_t msglen);
 
 /****************************************************************************
+ * Name: nxmu_flushclients
+ *
+ * Description:
+ *   Send the messages nxmu_sendclient() had to hold, as far as the clients'
+ *   MQs have room.  Returns true if some are still held.
+ *
+ ****************************************************************************/
+
+bool nxmu_flushclients(void);
+
+/****************************************************************************
+ * Name: nxmu_dropclient
+ *
+ * Description:
+ *   Forget the messages held for a disconnecting client.
+ *
+ ****************************************************************************/
+
+void nxmu_dropclient(FAR struct nxmu_conn_s *conn);
+
+/****************************************************************************
  * Name: nxmu_sendclientwindow
  *
  * Description:
