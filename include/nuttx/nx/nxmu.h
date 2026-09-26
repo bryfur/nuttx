@@ -549,6 +549,7 @@ struct nxsvrmsg_compositor_s
 {
   uint32_t msgid;                  /* NX_SVRMSG_COMPOSITOR */
   FAR int *caps;                   /* Where the answer goes */
+  FAR struct nxgl_size_s *size;    /* ... and the display's size */
   FAR sem_t *sem_done;
 };
 

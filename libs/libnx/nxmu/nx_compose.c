@@ -71,7 +71,7 @@ static int nx_compose_wait(FAR struct nxmu_conn_s *conn,
  * Public Functions
  ****************************************************************************/
 
-int nx_compositor(NXHANDLE handle)
+static int nx_compose_query(NXHANDLE handle, FAR struct nxgl_size_s *size)
 {
   struct nxsvrmsg_compositor_s msg;
   int caps = 0;
@@ -79,9 +79,25 @@ int nx_compositor(NXHANDLE handle)
 
   msg.msgid = NX_SVRMSG_COMPOSITOR;
   msg.caps  = &caps;
+  msg.size  = size;
   ret = nx_compose_wait((FAR struct nxmu_conn_s *)handle, NULL, &msg,
                         sizeof(msg), &msg.sem_done);
-  return ret < 0 ? 0 : caps;
+  return ret < 0 ? ret : caps;
+}
+
+int nx_compositor(NXHANDLE handle)
+{
+  struct nxgl_size_s size;
+  int caps = nx_compose_query(handle, &size);
+
+  return caps < 0 ? 0 : caps;
+}
+
+int nx_displaysize(NXHANDLE handle, FAR struct nxgl_size_s *size)
+{
+  int ret = nx_compose_query(handle, size);
+
+  return ret < 0 ? ret : OK;
 }
 
 int nx_seteffects(NXWINDOW hwnd, FAR const struct nx_effects_s *fx)

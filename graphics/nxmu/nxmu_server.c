@@ -679,6 +679,8 @@ int nx_runinstance(FAR const char *mqname, FAR NX_DRIVERTYPE *dev)
               FAR struct nxsvrmsg_compositor_s *compmsg =
                 (FAR struct nxsvrmsg_compositor_s *)buffer;
               *compmsg->caps = nxbe_compose_on() ? NX_CAP_COMPOSITOR : 0;
+              compmsg->size->w = nxmu.be.vinfo.xres;
+              compmsg->size->h = nxmu.be.vinfo.yres;
               nxsem_post(compmsg->sem_done);
             }
             break;

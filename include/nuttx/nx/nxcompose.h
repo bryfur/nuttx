@@ -160,6 +160,16 @@ extern "C"
 int nx_compositor(FAR void *handle);
 
 /****************************************************************************
+ * Name: nx_displaysize
+ *
+ * Description:
+ *   The display's size now (it may change: display modes).
+ *
+ ****************************************************************************/
+
+int nx_displaysize(FAR void *handle, FAR struct nxgl_size_s *size);
+
+/****************************************************************************
  * Name: nx_seteffects
  *
  * Description:
