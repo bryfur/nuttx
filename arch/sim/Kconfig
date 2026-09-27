@@ -410,6 +410,16 @@ config SIM_NET_BRIDGE_DEVICE
 
 endif
 
+config SIM_HOSTAUDIO
+	bool "Host sound for a board's audio"
+	default n
+	depends on HOST_LINUX
+	---help---
+		host_audio_open(), host_audio_write(): raw PCM from the board
+		into a pipe to a player on the host (aplay, or the command in
+		$SIM_AUDIO_PLAYER; empty: none), for a board that makes its
+		own audio stream (the FPC's GPU model).
+
 config SIM_SOUND
 	bool "Simulated sound support"
 	depends on AUDIO

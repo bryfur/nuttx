@@ -311,6 +311,10 @@ ifeq ($(CONFIG_SIM_CANDEV),y)
   HOSTSRCS += sim_hostcan.c
 endif
 
+ifeq ($(CONFIG_SIM_HOSTAUDIO),y)
+  HOSTSRCS += sim_hostaudio.c
+endif
+
 ifeq ($(CONFIG_SIM_CANDEV_CHAR),y)
   CSRCS += sim_canchar.c
 endif

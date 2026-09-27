@@ -251,6 +251,17 @@ static uint32_t translate_x11_key(uint32_t code)
     case XK_F24:
       return KEYCODE_F24;
 
+    /* The multimedia keys' volume controls (XF86XK_AudioLowerVolume,
+     * XF86XK_AudioMute, XF86XK_AudioRaiseVolume)
+     */
+
+    case 0x1008ff11:
+      return KEYCODE_VOLDOWN;
+    case 0x1008ff12:
+      return KEYCODE_MUTE;
+    case 0x1008ff13:
+      return KEYCODE_VOLUP;
+
     default:
       return KEYCODE_NORMAL;
     }

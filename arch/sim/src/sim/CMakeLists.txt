@@ -191,6 +191,10 @@ if(CONFIG_ARCH_HAVE_MULTICPU AND NOT WIN32)
   list(APPEND HOSTSRCS sim_hostsmp.c)
 endif()
 
+if(CONFIG_SIM_HOSTAUDIO)
+  list(APPEND HOSTSRCS sim_hostaudio.c)
+endif()
+
 if(CONFIG_SIM_X11FB)
   list(APPEND HOSTSRCS sim_x11framebuffer.c)
   if(APPLE)

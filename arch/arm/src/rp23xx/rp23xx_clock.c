@@ -53,13 +53,85 @@
 #include "rp23xx_clock.h"
 #include "rp23xx_xosc.h"
 #include "rp23xx_pll.h"
+#include "rp23xx_qmi_timing.h"
 #include "hardware/rp23xx_clocks.h"
 #include "hardware/rp23xx_resets.h"
 #include "hardware/rp23xx_ticks.h"
+#include "hardware/rp23xx_pads_qspi.h"
+#include "hardware/rp23xx_powman.h"
+#include "hardware/rp23xx_qmi.h"
 
 /****************************************************************************
  * Pre-processor Definitions
  ****************************************************************************/
+
+/* The system PLL: board.h may give the VCO and post dividers for its
+ * BOARD_PLL_SYS_FREQ; otherwise 12 MHz x 125 = 1500 MHz / 5 / 2 = 150 MHz.
+ */
+
+#ifndef BOARD_PLL_SYS_VCO_FREQ
+#  define BOARD_PLL_SYS_VCO_FREQ  (1500 * MHZ)
+#  define BOARD_PLL_SYS_POSTDIV1  5
+#  define BOARD_PLL_SYS_POSTDIV2  2
+#endif
+
+static_assert(BOARD_PLL_SYS_VCO_FREQ / BOARD_PLL_SYS_POSTDIV1 /
+              BOARD_PLL_SYS_POSTDIV2 == BOARD_PLL_SYS_FREQ,
+              "board.h: the system PLL does not make BOARD_PLL_SYS_FREQ");
+static_assert(BOARD_PLL_SYS_VCO_FREQ >= 750 * MHZ &&
+              BOARD_PLL_SYS_VCO_FREQ <= 1600 * MHZ,
+              "board.h: the system PLL's VCO is out of range");
+
+/* The core voltage (BOARD_VREG_MV, if the board gives one): 0.55 V + 50 mV
+ * steps in POWMAN VREG.VSEL, up to 1.30 V without lifting the limit.
+ */
+
+#ifdef BOARD_VREG_MV
+static_assert(BOARD_VREG_MV >= 850 && BOARD_VREG_MV <= 1300 &&
+              BOARD_VREG_MV % 50 == 0, "board.h: BOARD_VREG_MV");
+#  define VREG_VSEL             ((BOARD_VREG_MV - 550) / 50)
+#  define VREG_VSEL_SHIFT       4
+#  define POWMAN_PASSWORD       0x5afe0000
+#  define POWMAN_SET_ALIAS      0x2000
+
+/* How long the regulator is given to settle, as the Pico SDK */
+
+#  define VREG_SETTLE_US        1000
+#endif
+
+/* The flash's XIP timing (M0_TIMING) for BOARD_SYS_FREQ, if the board
+ * gives the part's limits (board.h, rp23xx_qmi_timing.h): the read mode
+ * stays the one the bootrom found working (EBh quad, else BBh, 0Bh, 03h;
+ * datasheet 5.2.7), only the clock and the sampling change.  The plain
+ * 03h read has a lower limit of its own.
+ */
+
+#ifdef BOARD_FLASH_MAX_FREQ
+#  define FLASH_CLKDIV \
+     RP23XX_QMI_CLKDIV(BOARD_SYS_FREQ, BOARD_FLASH_MAX_FREQ, \
+                       BOARD_FLASH_TCO_PS)
+#  define FLASH_03H_CLKDIV \
+     RP23XX_QMI_CLKDIV(BOARD_SYS_FREQ, BOARD_FLASH_03H_MAX_FREQ, \
+                       BOARD_FLASH_TCO_PS)
+#  define FLASH_TIMING(clkdiv) \
+     RP23XX_QMI_TIMING(1, RP23XX_QMI_PAGEBREAK_NONE, 0, 0, 0, \
+                       RP23XX_QMI_MIN_DESELECT(BOARD_SYS_FREQ, clkdiv, \
+                                               BOARD_FLASH_TCSH_NS), \
+                       clkdiv, clkdiv)
+static_assert(FLASH_CLKDIV >= 1 && FLASH_03H_CLKDIV <= 7,
+              "flash: CLKDIV (and RXDELAY) out of range");
+
+/* The QSPI pads as the Pico SDK's boot stage 2 sets them for a fast
+ * flash: SCLK 8 mA with a fast slew, no Schmitt trigger on SD0-3 (less
+ * input delay).
+ */
+
+#  define PADS_QSPI_SCLK        ((2 << 4) | \
+                                 RP23XX_PADS_QSPI_GPIO_QSPI_SCLK_SLEWFAST)
+#  define PADS_QSPI_SD_SCHMITT  (1 << 1)
+#  define PADS_CLR_ALIAS        0x3000
+#  define QMI_RCMD_PREFIX_03H   0x03
+#endif
 
 /****************************************************************************
  * Private Data
@@ -76,6 +148,98 @@ static void tick_start(int tick, int cycles)
   putreg32(cycles, RP23XX_TICKS_CYCLES(tick));
   putreg32(RP23XX_TICKS_WATCHDOG_CTRL_EN, RP23XX_TICKS_CTRL(tick));
 }
+
+#ifdef BOARD_VREG_MV
+/****************************************************************************
+ * Name: vreg_setup
+ *
+ * Description:
+ *   Set the core voltage for the clock about to be set up.  Called with
+ *   clk_sys on the 12 MHz crystal (so the wait needs no timer).
+ *
+ ****************************************************************************/
+
+static void vreg_setup(void)
+{
+  volatile uint32_t n;
+  uint32_t vreg = getreg32(RP23XX_POWMAN_VREG);
+
+  if (((vreg & RP23XX_POWMAN_VREG_VSEL_MASK) >> VREG_VSEL_SHIFT) ==
+      VREG_VSEL)
+    {
+      return;
+    }
+
+  /* VREG takes writes once unlocked (and cannot be locked again) */
+
+  putreg32(POWMAN_PASSWORD | RP23XX_POWMAN_VREG_CTRL_UNLOCK,
+           RP23XX_POWMAN_VREG_CTRL + POWMAN_SET_ALIAS);
+
+  while (getreg32(RP23XX_POWMAN_VREG) & RP23XX_POWMAN_VREG_UPDATE_IN_PROGRESS)
+    ;
+
+  vreg = getreg32(RP23XX_POWMAN_VREG) & 0xffff &
+         ~(RP23XX_POWMAN_VREG_VSEL_MASK |
+           RP23XX_POWMAN_VREG_UPDATE_IN_PROGRESS);
+  putreg32(POWMAN_PASSWORD | vreg | VREG_VSEL << VREG_VSEL_SHIFT,
+           RP23XX_POWMAN_VREG);
+
+  while (getreg32(RP23XX_POWMAN_VREG) & RP23XX_POWMAN_VREG_UPDATE_IN_PROGRESS)
+    ;
+
+  /* Let it settle: every pass is at least one cycle of the crystal */
+
+  for (n = BOARD_XOSC_FREQ / 1000000 * VREG_SETTLE_US; n > 0; n--)
+    ;
+}
+#endif
+
+#ifdef BOARD_FLASH_MAX_FREQ
+/****************************************************************************
+ * Name: flash_timing
+ *
+ * Description:
+ *   Set the flash's clock divider and read sampling for BOARD_SYS_FREQ,
+ *   before clk_sys is raised to it (the setting is as safe at the clock of
+ *   the moment: rp23xx_qmi_timing.h).  Runs from RAM: nothing may come
+ *   from the flash while its interface changes.
+ *
+ ****************************************************************************/
+
+static void locate_code(".time_critical.rp23xx_clock") noinline_function
+flash_timing(void)
+{
+  uint32_t timing;
+
+  if ((getreg32(RP23XX_QMI_M0_RCMD) & RP23XX_QMI_CMD_PREFIX_MASK) ==
+      QMI_RCMD_PREFIX_03H)
+    {
+      timing = FLASH_TIMING(FLASH_03H_CLKDIV);
+    }
+  else
+    {
+      timing = FLASH_TIMING(FLASH_CLKDIV);
+    }
+
+  putreg32(PADS_QSPI_SCLK, RP23XX_PADS_QSPI_GPIO_QSPI_SCLK);
+  putreg32(PADS_QSPI_SD_SCHMITT,
+           RP23XX_PADS_QSPI_GPIO_QSPI_SD0 + PADS_CLR_ALIAS);
+  putreg32(PADS_QSPI_SD_SCHMITT,
+           RP23XX_PADS_QSPI_GPIO_QSPI_SD1 + PADS_CLR_ALIAS);
+  putreg32(PADS_QSPI_SD_SCHMITT,
+           RP23XX_PADS_QSPI_GPIO_QSPI_SD2 + PADS_CLR_ALIAS);
+  putreg32(PADS_QSPI_SD_SCHMITT,
+           RP23XX_PADS_QSPI_GPIO_QSPI_SD3 + PADS_CLR_ALIAS);
+
+  putreg32(timing, RP23XX_QMI_M0_TIMING);
+
+  /* Read it back, so that the write has landed before the return fetches
+   * from the flash again.
+   */
+
+  (void)getreg32(RP23XX_QMI_M0_TIMING);
+}
+#endif
 
 static inline bool has_glitchless_mux(int clk_index)
 {
@@ -231,7 +395,9 @@ void clocks_init(void)
 
   /* Configure PLLs
    *                   REF     FBDIV VCO     POSTDIV
-   * PLL SYS: 12 / 1 = 12MHz * 125 = 1500MHz / 5 / 2 = 150MHz
+   * PLL SYS: board.h (BOARD_PLL_SYS_VCO_FREQ, BOARD_PLL_SYS_POSTDIV1/2),
+   *          e.g. 12 / 1 = 12MHz * 125 = 1500MHz / 5 / 2 = 150MHz
+   *               12 / 1 = 12MHz * 100 = 1200MHz / 6 / 1 = 200MHz
    * PLL USB: 12 / 1 = 12MHz * 100 = 1200MHz / 5 / 5 =  48MHz
    */
 
@@ -243,7 +409,8 @@ void clocks_init(void)
          (RP23XX_RESETS_RESET_PLL_SYS | RP23XX_RESETS_RESET_PLL_USB))
     ;
 
-  rp23xx_pll_init(RP23XX_PLL_SYS_BASE, 1, 1500 * MHZ, 5, 2);
+  rp23xx_pll_init(RP23XX_PLL_SYS_BASE, 1, BOARD_PLL_SYS_VCO_FREQ,
+                  BOARD_PLL_SYS_POSTDIV1, BOARD_PLL_SYS_POSTDIV2);
   rp23xx_pll_init(RP23XX_PLL_USB_BASE, 1, 1200 * MHZ, 5, 5);
 
   /* Configure clocks */
@@ -256,7 +423,19 @@ void clocks_init(void)
                          BOARD_XOSC_FREQ,
                          BOARD_REF_FREQ);
 
-  /* CLK SYS = PLL SYS (150MHz) / 1 = 150MHz */
+  /* Before clk_sys goes up (it runs on clk_ref, the crystal, now): the
+   * flash's clock divider for the new clock, then the core voltage, as the
+   * Pico SDK does.
+   */
+
+#ifdef BOARD_FLASH_MAX_FREQ
+  flash_timing();
+#endif
+#ifdef BOARD_VREG_MV
+  vreg_setup();
+#endif
+
+  /* CLK SYS = PLL SYS / 1 = BOARD_SYS_FREQ */
 
   rp23xx_clock_configure(RP23XX_CLOCKS_NDX_SYS,
                          RP23XX_CLOCKS_CLK_SYS_CTRL_SRC_CLKSRC_CLK_SYS_AUX,
@@ -280,7 +459,7 @@ void clocks_init(void)
                          BOARD_PLL_USB_FREQ,
                          BOARD_ADC_FREQ);
 
-  /* CLK PERI = clk_sys. */
+  /* CLK PERI = clk_sys / 1 or more (BOARD_PERI_FREQ) */
 
   rp23xx_clock_configure(RP23XX_CLOCKS_NDX_PERI,
                          0,
@@ -288,7 +467,7 @@ void clocks_init(void)
                          BOARD_SYS_FREQ,
                          BOARD_PERI_FREQ);
 
-  /* CLK HSTX = clk_sys */
+  /* CLK HSTX = clk_sys / 1 or more (BOARD_HSTX_FREQ) */
 
   rp23xx_clock_configure(RP23XX_CLOCKS_NDX_HSTX,
                          0,
