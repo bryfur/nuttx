@@ -1756,7 +1756,7 @@ static bool comp_unpark(void)
   FAR struct nxbe_window_s *wnd;
   clock_t now = clock_systime_ticks();
 
-  if (g_comp.nparked > 0)
+  if (g_comp.nparked > 0 || g_comp.changed)
     {
       for (wnd = nxbe_surface_list(); wnd != NULL; wnd = wnd->surfnext)
         {
