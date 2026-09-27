@@ -39,14 +39,18 @@
 
 #include <nuttx/config.h>
 
+#include <assert.h>
 #include <stdint.h>
 #include <stddef.h>
 
 #include <nuttx/irq.h>
 
+#include <arch/board/board.h>
+
 #include "arm_internal.h"
 #include "rp23xx_gpio.h"
 #include "rp23xx_psram.h"
+#include "rp23xx_qmi_timing.h"
 #include "hardware/rp23xx_qmi.h"
 #include "hardware/rp23xx_xip.h"
 #include "hardware/rp23xx_memorymap.h"
@@ -73,18 +77,67 @@
 
 #define QMI_DIRECT_TX_IWIDTH_Q    (2 << RP23XX_QMI_DIRECT_TX_IWIDTH_SHIFT)
 
-/* Final QMI M1 register values for the APS6404 in quad mode.  Computed from
- * the field layout in the RP2350 datasheet to match the Pico SDK:
+/* The part's limits (APS6404L; a board may give its own in board.h) */
+
+#ifndef BOARD_PSRAM_MAX_FREQ
+#  define BOARD_PSRAM_MAX_FREQ    133000000
+#endif
+#ifndef BOARD_PSRAM_TCO_PS
+#  define BOARD_PSRAM_TCO_PS      5500      /* tACLK */
+#endif
+#ifndef BOARD_PSRAM_TCPH_NS
+#  define BOARD_PSRAM_TCPH_NS     18        /* CS high between bursts */
+#endif
+#ifndef BOARD_PSRAM_TCEM_NS
+#  define BOARD_PSRAM_TCEM_NS     8000      /* CS low at most (refresh) */
+#endif
+
+/* M1_TIMING from clk_sys and those (rp23xx_qmi_timing.h):
  *
- * TIMING: COOLDOWN=1, PAGEBREAK=1024, SELECT_HOLD=3, MAX_SELECT=16,
- *         MIN_DESELECT=7, RXDELAY=1, CLKDIV=2.
- * RFMT:   quad prefix/addr/suffix/dummy/data, 8-bit prefix, 24 dummy bits.
+ *   CLKDIV       SCK within 133 MHz and one round trip: 2 at 150 and
+ *                200 MHz (75 and 100 MHz)
+ *   RXDELAY      = CLKDIV: sampled one SCK after the launching edge
+ *   MIN_DESELECT tCPH: 1 + 2 cycles at 150 MHz, 1 + 3 at 200 MHz
+ *   MAX_SELECT   tCEM less one burst: 17 x 64 cycles (7.3 us) at 150 MHz,
+ *                24 x 64 (7.7 us) at 200 MHz
+ *   SELECT_SETUP one more cycle between CS and SCK: CS1 is a bank 0 GPIO,
+ *                up to 2.1 ns later than the QSPI pins (datasheet Table
+ *                1288), which would leave some 3 ns of the half SCK at
+ *                100 MHz
+ *   SELECT_HOLD  3 cycles; COOLDOWN 64 cycles; PAGEBREAK at the part's
+ *                1 KB pages (a burst across one is limited to 84 MHz)
+ */
+
+#define PSRAM_CLKDIV \
+  RP23XX_QMI_CLKDIV(BOARD_SYS_FREQ, BOARD_PSRAM_MAX_FREQ, BOARD_PSRAM_TCO_PS)
+
+#define RP23XX_PSRAM_M1_TIMING \
+  RP23XX_QMI_TIMING(1, RP23XX_QMI_PAGEBREAK_1024, 1, 3, \
+                    RP23XX_QMI_MAX_SELECT(BOARD_SYS_FREQ, \
+                                          BOARD_PSRAM_TCEM_NS), \
+                    RP23XX_QMI_MIN_DESELECT(BOARD_SYS_FREQ, PSRAM_CLKDIV, \
+                                            BOARD_PSRAM_TCPH_NS), \
+                    PSRAM_CLKDIV, PSRAM_CLKDIV)
+
+static_assert(PSRAM_CLKDIV >= 1 && PSRAM_CLKDIV <= 7,
+              "PSRAM: CLKDIV (and RXDELAY) out of range");
+static_assert(RP23XX_QMI_MAX_SELECT(BOARD_SYS_FREQ, BOARD_PSRAM_TCEM_NS)
+              >= 1 &&
+              RP23XX_QMI_MAX_SELECT(BOARD_SYS_FREQ, BOARD_PSRAM_TCEM_NS)
+              <= 63, "PSRAM: MAX_SELECT out of range");
+static_assert(RP23XX_QMI_MIN_DESELECT(BOARD_SYS_FREQ, PSRAM_CLKDIV,
+                                      BOARD_PSRAM_TCPH_NS) <= 31,
+              "PSRAM: MIN_DESELECT out of range");
+
+/* The rest of the QMI M1 registers for the APS6404 in quad (QPI) mode:
+ *
+ * RFMT:   quad prefix/addr/suffix/dummy/data, 8-bit prefix, 24 dummy bits
+ *         (the part's 6 wait cycles for EBh, at any clock up to 133 MHz).
  * RCMD:   read prefix 0xeb.
  * WFMT:   quad prefix/addr/suffix/dummy/data, 8-bit prefix, no dummy.
  * WCMD:   write prefix 0x38.
  */
 
-#define RP23XX_PSRAM_M1_TIMING    0x61a07102
 #define RP23XX_PSRAM_M1_RFMT      0x000612aa
 #define RP23XX_PSRAM_M1_RCMD      0x000000eb
 #define RP23XX_PSRAM_M1_WFMT      0x000012aa
