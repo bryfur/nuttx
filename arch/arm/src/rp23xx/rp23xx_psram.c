@@ -97,7 +97,8 @@
  *   CLKDIV       SCK within 133 MHz and one round trip: 2 at 150 and
  *                200 MHz (75 and 100 MHz)
  *   RXDELAY      = CLKDIV: sampled one SCK after the launching edge
- *   MIN_DESELECT tCPH: 1 + 2 cycles at 150 MHz, 1 + 3 at 200 MHz
+ *   MIN_DESELECT tCPH: 1 + 7 cycles at 150 MHz, 1 + 9 at 200 MHz (with
+ *                the ESP-PSRAM64H's 50 ns)
  *   MAX_SELECT   tCEM less one burst: 17 x 64 cycles (7.3 us) at 150 MHz,
  *                24 x 64 (7.7 us) at 200 MHz
  *   SELECT_SETUP one more cycle between CS and SCK: CS1 is a bank 0 GPIO,
