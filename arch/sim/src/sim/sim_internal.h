@@ -243,6 +243,12 @@ int host_unlinkshmem(const char *name);
 
 int host_inittimer(void);
 uint64_t host_gettime(bool rtc);
+
+/* sim_hostaudio.c (CONFIG_SIM_HOSTAUDIO) */
+
+int  host_audio_open(unsigned int rate, unsigned int channels);
+int  host_audio_write(const void *buf, int nbytes, int framebytes);
+void host_audio_close(void);
 void host_sleep(uint64_t nsec);
 void host_sleepuntil(uint64_t nsec);
 void host_set_timeratio(int ratio);
