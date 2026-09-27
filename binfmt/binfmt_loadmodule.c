@@ -27,6 +27,7 @@
 #include <nuttx/config.h>
 
 #include <sched.h>
+#include <stdlib.h>
 #include <nuttx/debug.h>
 #include <errno.h>
 
@@ -209,9 +210,17 @@ int load_module(FAR struct binary_s *bin, FAR const char *filename,
 
                   ret = load_absmodule(bin, fullpath, exports, nexports);
 
-                  /* Free the allocated fullpath */
+                  /* Free the allocated fullpath.  envpath_next() is in the
+                   * C library, which a flat build compiles once, for
+                   * applications: its memory is from the user heap, not
+                   * the kernel's (CONFIG_MM_KERNEL_HEAP).
+                   */
 
+#ifdef CONFIG_BUILD_FLAT
+                  free(fullpath);
+#else
                   lib_free(fullpath);
+#endif
 
                   /* Break out of the loop with ret == OK on success */
 
