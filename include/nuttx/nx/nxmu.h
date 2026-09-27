@@ -122,6 +122,14 @@ struct nxmu_conn_s
   uint16_t npending;
   bool listed;
   FAR struct nxmu_conn_s *pnext;
+
+#ifdef CONFIG_NX_KBD
+  /* What the client's windows get from the keyboard (NX_KBDMODE_*,
+   * nxkeys.h): bytes, or key events as they come
+   */
+
+  uint8_t kbdmode;
+#endif
 };
 
 /* Message IDs **************************************************************/
@@ -173,7 +181,8 @@ enum nxmsg_e
   NX_SVRMSG_SETDLIST,         /* A layer window's display list */
   NX_SVRMSG_GPUOPS,           /* Operations of the display hardware */
   NX_SVRMSG_SETLUT,           /* Load a shape table */
-  NX_SVRMSG_DISPLAYMODE       /* Get or set the display mode */
+  NX_SVRMSG_DISPLAYMODE,      /* Get or set the display mode */
+  NX_SVRMSG_KBDMODE           /* Bytes or key events from the keyboard */
 };
 
 /* Server-to-Client Message Structures **************************************/
@@ -539,6 +548,15 @@ struct nxsvrmsg_kbdin_s
   uint32_t msgid;                  /* NX_SVRMSG_KBDIN */
   uint8_t nch;                     /* Number of characters received */
   uint8_t ch[1];                   /* Array of received characters */
+};
+
+/* What a connection's windows get from the keyboard (nx_kbdmode()) */
+
+struct nxsvrmsg_kbdmode_s
+{
+  uint32_t msgid;                  /* NX_SVRMSG_KBDMODE */
+  FAR struct nxmu_conn_s *conn;    /* The client's connection */
+  uint8_t mode;                    /* NX_KBDMODE_* */
 };
 #endif
 

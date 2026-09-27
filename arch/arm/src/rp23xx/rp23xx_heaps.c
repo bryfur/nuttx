@@ -38,13 +38,41 @@
  * Pre-processor Definitions
  ****************************************************************************/
 
-/* The PSRAM base address is fixed; the size is whatever rp23xx_psramconfig()
- * detected at boot (0 if no PSRAM is fitted).  psramconfig() runs from
- * rp23xx_boardinitialize(), before any of the heap hooks below, so the
- * detected size is always available here.
+/* The PSRAM base address is fixed (RP23XX_PSRAM_BASE); the size is
+ * whatever rp23xx_psramconfig() detected at boot (0 if no PSRAM is fitted).
+ * psramconfig() runs from rp23xx_boardinitialize(), before any of the heap
+ * hooks below, so the detected size is always available here.
  */
 
-#define PSRAM_START ((void *)RP23XX_PSRAM_BASE)
+/****************************************************************************
+ * Private Data
+ ****************************************************************************/
+
+/* A board's linker script may put static data at the start of the PSRAM
+ * (sections that end at _epsram_bss): the heap is the rest of it.
+ */
+
+extern uint8_t _epsram_bss[] weak_data;
+
+/****************************************************************************
+ * Private Functions
+ ****************************************************************************/
+
+/* The part of the PSRAM the heap may have: after any static data */
+
+static inline void *psram_heap(size_t *size)
+{
+  uintptr_t start = RP23XX_PSRAM_BASE;
+  uintptr_t end   = RP23XX_PSRAM_BASE + rp23xx_psram_size();
+
+  if ((uintptr_t)_epsram_bss > start && (uintptr_t)_epsram_bss < end)
+    {
+      start = ((uintptr_t)_epsram_bss + 15) & ~(uintptr_t)15;
+    }
+
+  *size = end > start ? end - start : 0;
+  return (void *)start;
+}
 
 /****************************************************************************
  * Public Functions
@@ -62,13 +90,14 @@ static struct mm_heap_s *g_psramheap;
 #if CONFIG_MM_REGIONS > 1
 void arm_addregion(void)
 {
-  size_t psram_size = rp23xx_psram_size();
+  size_t psram_size;
+  void *psram_start = psram_heap(&psram_size);
 
   /* Add the detected PSRAM region to the main heap */
 
   if (psram_size > 0)
     {
-      kumm_addregion(PSRAM_START, psram_size);
+      kumm_addregion(psram_start, psram_size);
     }
 }
 #endif
@@ -96,8 +125,7 @@ void up_allocate_kheap(void **heap_start, size_t *heap_size)
 
 void up_allocate_heap(void **heap_start, size_t *heap_size)
 {
-  *heap_start = PSRAM_START;
-  *heap_size  = rp23xx_psram_size();
+  *heap_start = psram_heap(heap_size);
 }
 
 #elif defined (CONFIG_RP23XX_PSRAM_HEAP_SEPARATE)
@@ -108,11 +136,12 @@ void up_allocate_heap(void **heap_start, size_t *heap_size)
 
 void up_extraheaps_init(void)
 {
-  size_t psram_size = rp23xx_psram_size();
+  size_t psram_size;
+  void *psram_start = psram_heap(&psram_size);
 
   if (psram_size > 0)
     {
-      g_psramheap = mm_initialize("psram", PSRAM_START, psram_size);
+      g_psramheap = mm_initialize("psram", psram_start, psram_size);
     }
 }
 
