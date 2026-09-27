@@ -230,6 +230,20 @@ int nx_setdisplaylist(FAR void *hwnd, FAR const struct nx_gpuop_s *ops,
 int nx_gpuops(FAR void *hwnd, FAR const struct nx_gpuop_s *ops, int nops);
 
 /****************************************************************************
+ * Name: nx_surface
+ *
+ * Description:
+ *   Where a window's pixels are now: 1 in a surface of the display
+ *   hardware (drawing, copying and blending from it are the hardware's),
+ *   0 in memory (there was no room: slow) or nowhere.  A client that
+ *   holds large images in hidden windows can make them smaller until
+ *   they fit.
+ *
+ ****************************************************************************/
+
+int nx_surface(FAR void *hwnd);
+
+/****************************************************************************
  * Name: nx_setlut
  *
  * Description:

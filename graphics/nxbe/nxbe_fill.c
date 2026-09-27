@@ -213,26 +213,26 @@ void nxbe_fill(FAR struct nxbe_window_s *wnd,
 
   nxgl_rectoffset(&remaining, rect, wnd->bounds.pt1.x, wnd->bounds.pt1.y);
 
-  /* Clip to the bounding box to the limits of the window and of the
-   * background screen
-   */
+  /* Clip to the bounding box to the limits of the window */
 
   nxgl_rectintersect(&remaining, &remaining, &wnd->bounds);
-  nxgl_rectintersect(&remaining, &remaining, &wnd->be->bkgd.bounds);
 
-  if (!nxgl_nullrect(&remaining))
-    {
 #ifdef CONFIG_NX_RAMBACKED
-      /* If this window supports a pre-window frame buffer then shadow the
-       * full, unclipped bitmap in that framebuffer.
-       */
+  /* If this window supports a pre-window frame buffer then shadow the
+   * full bitmap in that framebuffer, on the display or not.
+   */
 
-      if (NXBE_ISRAMBACKED(wnd))
-        {
-          nxbe_fill_pwfb(wnd, &remaining, color);
-        }
+  if (NXBE_ISRAMBACKED(wnd) && !nxgl_nullrect(&remaining))
+    {
+      nxbe_fill_pwfb(wnd, &remaining, color);
+    }
 #endif
 
+  /* The device: only what is on the background screen */
+
+  nxgl_rectintersect(&remaining, &remaining, &wnd->be->bkgd.bounds);
+  if (!nxgl_nullrect(&remaining))
+    {
       /* Don't update hidden windows */
 
       if (!NXBE_ISHIDDEN(wnd))

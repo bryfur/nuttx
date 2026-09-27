@@ -173,7 +173,14 @@ void nxbe_getrectangle(FAR struct nxbe_window_s *wnd,
    */
 
   nxgl_rectintersect(&remaining, &remaining, &wnd->bounds);
-  nxgl_rectintersect(&remaining, &remaining, &wnd->be->bkgd.bounds);
+#ifdef CONFIG_NX_RAMBACKED
+  if (!NXBE_ISRAMBACKED(wnd))
+#endif
+    {
+      /* Only a per-window framebuffer has what is off the screen */
+
+      nxgl_rectintersect(&remaining, &remaining, &wnd->be->bkgd.bounds);
+    }
 
   /* The return the graphics memory at this location. */
 

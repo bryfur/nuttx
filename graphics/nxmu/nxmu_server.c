@@ -842,6 +842,19 @@ int nx_runinstance(FAR const char *mqname, FAR NX_DRIVERTYPE *dev)
             }
             break;
 
+          case NX_SVRMSG_SURFACE: /* Where a window's pixels are */
+            {
+              FAR struct nxsvrmsg_surface_s *surfmsg =
+                (FAR struct nxsvrmsg_surface_s *)buffer;
+#if defined(CONFIG_NX_RAMBACKED) && defined(CONFIG_NX_ACCEL)
+              *surfmsg->result = surfmsg->wnd->surface ? 1 : 0;
+#else
+              *surfmsg->result = 0;
+#endif
+              nxsem_post(surfmsg->sem_done);
+            }
+            break;
+
           case NX_SVRMSG_SETLUT: /* Load a shape table */
             {
               FAR struct nxsvrmsg_setlut_s *lutmsg =
