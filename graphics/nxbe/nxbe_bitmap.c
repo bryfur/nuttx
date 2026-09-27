@@ -139,12 +139,11 @@ static inline void nxbe_bitmap_pwfb(FAR struct nxbe_window_s *wnd,
 
   nxgl_rectoffset(&destrect, dest, wnd->bounds.pt1.x, wnd->bounds.pt1.y);
 
-  /* Clip to the limits of the window and of the background screen (in
-   * device coordinates.
+  /* Clip to the limits of the window (in device coordinates): all of it
+   * is in the framebuffer, on the background screen or not.
    */
 
   nxgl_rectintersect(&destrect, &destrect, &wnd->bounds);
-  nxgl_rectintersect(&destrect, &destrect, &wnd->be->bkgd.bounds);
 
   if (!nxgl_nullrect(&destrect))
     {

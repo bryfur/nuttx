@@ -173,7 +173,8 @@ enum nxmsg_e
   NX_SVRMSG_SETDLIST,         /* A layer window's display list */
   NX_SVRMSG_GPUOPS,           /* Operations of the display hardware */
   NX_SVRMSG_SETLUT,           /* Load a shape table */
-  NX_SVRMSG_DISPLAYMODE       /* Get or set the display mode */
+  NX_SVRMSG_DISPLAYMODE,      /* Get or set the display mode */
+  NX_SVRMSG_SURFACE           /* Where a window's pixels are */
 };
 
 /* Server-to-Client Message Structures **************************************/
@@ -596,6 +597,14 @@ struct nxsvrmsg_displaymode_s
   bool set;                        /* Change to it */
   FAR int *result;                 /* Its number, or a negated errno */
   FAR struct nxgl_size_s *size;    /* Its size */
+  FAR sem_t *sem_done;
+};
+
+struct nxsvrmsg_surface_s
+{
+  uint32_t msgid;                  /* NX_SVRMSG_SURFACE */
+  FAR struct nxbe_window_s *wnd;
+  FAR int *result;                 /* 1: a surface, 0: memory or none */
   FAR sem_t *sem_done;
 };
 #endif
