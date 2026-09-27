@@ -150,7 +150,8 @@ static int nx_sendops(NXWINDOW hwnd, uint32_t msgid,
 {
   struct nxsvrmsg_gpuops_s msg;
 
-  if (hwnd == NULL || nops < 0 || nops > NX_GPUOPS_MAX ||
+  if (hwnd == NULL || nops < 0 ||
+      nops > (msgid == NX_SVRMSG_SETDLIST ? NX_DLIST_MAX : NX_GPUOPS_MAX) ||
       (nops > 0 && ops == NULL))
     {
       set_errno(EINVAL);
@@ -173,6 +174,25 @@ int nx_setdisplaylist(NXWINDOW hwnd, FAR const struct nx_gpuop_s *ops,
 int nx_gpuops(NXWINDOW hwnd, FAR const struct nx_gpuop_s *ops, int nops)
 {
   return nx_sendops(hwnd, NX_SVRMSG_GPUOPS, ops, nops);
+}
+
+int nx_surface(NXWINDOW hwnd)
+{
+  struct nxsvrmsg_surface_s msg;
+  int result = 0;
+  int ret;
+
+  if (hwnd == NULL)
+    {
+      set_errno(EINVAL);
+      return ERROR;
+    }
+
+  msg.msgid  = NX_SVRMSG_SURFACE;
+  msg.wnd    = (FAR struct nxbe_window_s *)hwnd;
+  msg.result = &result;
+  ret = nx_compose_wait(NULL, msg.wnd, &msg, sizeof(msg), &msg.sem_done);
+  return ret < 0 ? ret : result;
 }
 
 int nx_setlut(NXHANDLE handle, int slot,

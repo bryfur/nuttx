@@ -35,6 +35,7 @@ if(CONFIG_NX)
       nx_synch.c
       nx_kbdchin.c
       nx_kbdin.c
+      nx_keys.c
       nx_mousein.c
       nx_releasebkgd.c
       nx_requestbkgd.c

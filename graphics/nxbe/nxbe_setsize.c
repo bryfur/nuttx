@@ -369,9 +369,18 @@ void nxbe_setsize(FAR struct nxbe_window_s *wnd,
   wnd->bounds.pt2.x = wnd->bounds.pt1.x + size->w - 1;
   wnd->bounds.pt2.y = wnd->bounds.pt1.y + size->h - 1;
 
-  /* Clip the new bounding box so that lies within the background screen */
+  /* Clip the new bounding box so that lies within the background screen,
+   * unless the window keeps its own pixels (RAM-backed: hidden windows
+   * holding images may be larger than the display)
+   */
 
-  nxgl_rectintersect(&wnd->bounds, &wnd->bounds, &wnd->be->bkgd.bounds);
+#ifdef CONFIG_NX_RAMBACKED
+  if (!NXBE_ISRAMBACKED(wnd))
+#endif
+    {
+      nxgl_rectintersect(&wnd->bounds, &wnd->bounds,
+                         &wnd->be->bkgd.bounds);
+    }
 
   /* Report the new size/position.  The application needs to know the new
    * size before getting redraw requests.

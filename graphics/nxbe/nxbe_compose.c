@@ -844,8 +844,9 @@ static void comp_pixels(FAR struct nxbe_window_s *wnd,
     }
 }
 
-/* A window's 1-pixel light edge where it meets display rectangle c: its
- * outer rows and columns and its corner squares, blended with the ring
+/* A window's 1-pixel light edge (dark with NX_FX_DARKEDGE) where it meets
+ * display rectangle c: its outer rows and columns and its corner squares,
+ * blended with the ring
  */
 
 static void comp_border(FAR struct nxbe_window_s *wnd,
@@ -883,7 +884,7 @@ static void comp_border(FAR struct nxbe_window_s *wnd,
 
       nxgl_rectoffset(&part[i], &part[i], off->x, off->y);
       op_blend_init(&b, &part[i]);
-      b.colour = 0xffff;
+      b.colour = (wnd->fx.flags & NX_FX_DARKEDGE) != 0 ? 0x0000 : 0xffff;
       b.alpha  = wnd->fx.border;
       b.mode   = NX_BLEND_SRC_COLOUR | NX_BLEND_MOD_LUT;
       b.slot   = NX_LUT_RING;
