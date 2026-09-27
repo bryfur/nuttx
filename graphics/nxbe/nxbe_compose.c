@@ -152,6 +152,7 @@ struct nxcomp_s
   bool hold;                              /* ... for windows being drawn */
   bool changed;                           /* The statistics are old */
   bool packed;                            /* Packed for a second buffer */
+  bool packlater;                         /* ... to be tried again */
   clock_t lastpack;                       /* ... then */
   uint16_t nparked;                       /* Windows parked */
   int ndamage;
@@ -1372,6 +1373,7 @@ static void comp_getback(bool pack)
       if (!pack && g_comp.packed &&
           clock_systime_ticks() - g_comp.lastpack < NXCOMP_PACKAGAIN)
         {
+          g_comp.packlater = true;         /* nxbe_compose_idle() */
           return;
         }
 
@@ -2473,6 +2475,23 @@ int nxbe_compose_idle(void)
     {
       nxbe_srccache_trim();
       comp_snapshot();
+    }
+
+  /* A second display buffer that did not fit: packing again when it may */
+
+  if (g_comp.packlater && !g_comp.dbuf)
+    {
+      clock_t since = now - g_comp.lastpack;
+
+      if (since >= NXCOMP_PACKAGAIN)
+        {
+          g_comp.packlater = false;
+          g_comp.retry     = true;
+        }
+      else if (elapsed >= NXCOMP_IDLEPOLL)
+        {
+          next = (int32_t)(NXCOMP_PACKAGAIN - since);
+        }
     }
 
   if (elapsed < NXCOMP_IDLEPOLL)

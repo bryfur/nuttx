@@ -79,6 +79,15 @@ static void nxmu_accel_idle(mqd_t mqd)
   bool idle = mq_getattr(mqd, &attr) < 0 || attr.mq_curmsgs == 0;
 
 #ifdef CONFIG_NX_COMPOSITOR
+  /* Nothing more coming: windows not seen for a while give up their
+   * surfaces
+   */
+
+  if (idle)
+    {
+      g_idlewait = nxbe_compose_idle();
+    }
+
   /* Composite what has changed: when nothing more is coming, or when it
    * has waited long enough in a stream of messages; and not before the
    * frame is due (nxbe_compose_wait())
@@ -93,11 +102,6 @@ static void nxmu_accel_idle(mqd_t mqd)
 
   if (idle)
     {
-#ifdef CONFIG_NX_COMPOSITOR
-      /* Windows not seen for a while give up their surfaces */
-
-      g_idlewait = nxbe_compose_idle();
-#endif
       nxbe_accel_flush();
     }
 }
