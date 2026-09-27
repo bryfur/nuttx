@@ -773,6 +773,14 @@ int nx_runinstance(FAR const char *mqname, FAR NX_DRIVERTYPE *dev)
               nxmu_kbdin(&nxmu, kbdmsg->nch, kbdmsg->ch);
             }
             break;
+
+          case NX_SVRMSG_KBDMODE: /* Bytes or key events for a client */
+            {
+              FAR struct nxsvrmsg_kbdmode_s *modemsg =
+                (FAR struct nxsvrmsg_kbdmode_s *)buffer;
+              modemsg->conn->kbdmode = modemsg->mode;
+            }
+            break;
 #endif
 
           case NX_SVRMSG_REDRAWREQ: /* Request re-drawing of rectangular region */

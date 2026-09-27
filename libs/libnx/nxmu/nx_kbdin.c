@@ -32,6 +32,7 @@
 #include <errno.h>
 
 #include <nuttx/nx/nx.h>
+#include <nuttx/nx/nxkeys.h>
 #include <nuttx/nx/nxmu.h>
 
 #include "nxcontext.h"
@@ -70,7 +71,7 @@ int nx_kbdin(NXHANDLE handle, uint8_t nch, FAR const uint8_t *ch)
 
   while (nch > 0 && ret >= 0)
     {
-      n = nch < NX_KBDIN_MAXCH ? nch : NX_KBDIN_MAXCH;
+      n = nx_key_split(ch, nch, NX_KBDIN_MAXCH);
       out.msg.msgid = NX_SVRMSG_KBDIN;
       out.msg.nch   = n;
       memcpy(out.msg.ch, ch, n);
