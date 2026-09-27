@@ -150,7 +150,8 @@ static int nx_sendops(NXWINDOW hwnd, uint32_t msgid,
 {
   struct nxsvrmsg_gpuops_s msg;
 
-  if (hwnd == NULL || nops < 0 || nops > NX_GPUOPS_MAX ||
+  if (hwnd == NULL || nops < 0 ||
+      nops > (msgid == NX_SVRMSG_SETDLIST ? NX_DLIST_MAX : NX_GPUOPS_MAX) ||
       (nops > 0 && ops == NULL))
     {
       set_errno(EINVAL);

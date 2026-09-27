@@ -74,6 +74,8 @@
 
 #define NX_FX_ROUND            0x01    /* Round corners (NX_COMPOSITOR_RADIUS) */
 #define NX_FX_KEY              0x02    /* Pixels of colour key are clear */
+#define NX_FX_DARKEDGE         0x04    /* The 1-pixel edge (border) is dark,
+                                        * not light: for light windows */
 
 /* nx_compositor() capabilities */
 
@@ -85,9 +87,12 @@
 #define NX_GPUOP_BLEND         2       /* Blend (mode: NX_BLEND_*, nxaccel.h) */
 #define NX_GPUOP_COPY          3       /* Copy from src (opaque) */
 
-/* The most operations one nx_gpuops() or nx_setdisplaylist() takes */
+/* The most operations one nx_gpuops() takes, and a layer window's display
+ * list (nx_setdisplaylist(): the server keeps a copy)
+ */
 
 #define NX_GPUOPS_MAX          256
+#define NX_DLIST_MAX           1024
 
 /****************************************************************************
  * Public Types
@@ -102,7 +107,8 @@ struct nx_effects_s
   int8_t   shadowdy;             /* Shadow offset down, pixels */
   uint8_t  backdrop;             /* Alpha of a tint drawn behind the window
                                   * (translucent panels), 0: none */
-  uint8_t  border;               /* Alpha of a 1-pixel light edge, 0: none */
+  uint8_t  border;               /* Alpha of a 1-pixel light edge (dark
+                                  * with NX_FX_DARKEDGE), 0: none */
   nxgl_mxpixel_t tint;           /* ... its colour */
   nxgl_mxpixel_t key;            /* NX_FX_KEY: the clear colour */
 };
