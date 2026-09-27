@@ -773,6 +773,14 @@ int nx_runinstance(FAR const char *mqname, FAR NX_DRIVERTYPE *dev)
               nxmu_kbdin(&nxmu, kbdmsg->nch, kbdmsg->ch);
             }
             break;
+
+          case NX_SVRMSG_KBDMODE: /* Bytes or key events for a client */
+            {
+              FAR struct nxsvrmsg_kbdmode_s *modemsg =
+                (FAR struct nxsvrmsg_kbdmode_s *)buffer;
+              modemsg->conn->kbdmode = modemsg->mode;
+            }
+            break;
 #endif
 
           case NX_SVRMSG_REDRAWREQ: /* Request re-drawing of rectangular region */
@@ -831,6 +839,19 @@ int nx_runinstance(FAR const char *mqname, FAR NX_DRIVERTYPE *dev)
                                                   modemsg->set,
                                                   modemsg->size);
               nxsem_post(modemsg->sem_done);
+            }
+            break;
+
+          case NX_SVRMSG_SURFACE: /* Where a window's pixels are */
+            {
+              FAR struct nxsvrmsg_surface_s *surfmsg =
+                (FAR struct nxsvrmsg_surface_s *)buffer;
+#if defined(CONFIG_NX_RAMBACKED) && defined(CONFIG_NX_ACCEL)
+              *surfmsg->result = surfmsg->wnd->surface ? 1 : 0;
+#else
+              *surfmsg->result = 0;
+#endif
+              nxsem_post(surfmsg->sem_done);
             }
             break;
 
