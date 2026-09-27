@@ -103,7 +103,7 @@
 #define NXCOMP_IDLEPOLL   MSEC2TICK(50)    /* Parking: looked at so often */
 #define NXCOMP_QUIET      MSEC2TICK(400)   /* ... and not while windows move */
 #define NXCOMP_PARKHIDDEN MSEC2TICK(500)   /* ... hidden so long */
-#define NXCOMP_PARKCOVER  MSEC2TICK(2000)  /* ... covered so long */
+#define NXCOMP_PARKCOVER  MSEC2TICK(1000)  /* ... covered so long */
 #define NXCOMP_REDRAWHOLD MSEC2TICK(50)    /* A window being drawn again:
                                             * the frame waits for it */
 #define NXCOMP_PACKAGAIN  MSEC2TICK(5000)  /* Surfaces packed for a second
@@ -2451,7 +2451,7 @@ void nxbe_compose_redrawing(FAR struct nxbe_window_s *wnd)
  *
  * Description:
  *   The server is idle: windows that have not been seen for a while (half
- *   a second hidden, two seconds covered) and may be parked (NX_FX_PARK)
+ *   a second hidden, a second covered) and may be parked (NX_FX_PARK)
  *   are parked, unless windows are being moved (a drag).  Returns how many
  *   ticks until it should be called again, -1 if only after something
  *   changes.
