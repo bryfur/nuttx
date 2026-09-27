@@ -113,6 +113,13 @@ void nxmu_openwindow(FAR struct nxbe_state_s *be,
    * (drawing and showing the window are then the hardware's operations).
    */
 
+#ifdef CONFIG_NX_COMPOSITOR
+  if (NXBE_ISIMAGE(wnd))
+    {
+      wnd->surfkind = NX_SURFACE_IMAGE;
+    }
+#endif
+
   if (NXBE_ISRAMBACKED(wnd) && nxbe_surface_open(wnd))
     {
       width       = wnd->bounds.pt2.x - wnd->bounds.pt1.x + 1;

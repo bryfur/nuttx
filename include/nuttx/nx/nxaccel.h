@@ -51,6 +51,12 @@
  * with a falloff, it is a soft shadow.  Ramps: m = clamp((p[2] + (x - p[0])
  * * p[1]) / 256, 0, 255) (x, or y).  Shape coordinates are the display's,
  * like dest.
+ *
+ * A BC1 source (NX_ACCEL_BC1) reads 4 x 4 blocks of 64 bits (DXT1: two
+ * RGB565 colours, sixteen 2-bit indices) from the hardware's memory seen
+ * as four times as tall: a surface at (X, Y) holding a row of blocks per
+ * row of the surface (8 bytes, 4 pixels, a block) is the image at (X, 4Y);
+ * src is the image pixel at dest.pt1 there.
  */
 
 #define NX_BLEND_SRC_COLOUR   0x00     /* S = colour, f = 255 */
@@ -63,6 +69,9 @@
 #define NX_BLEND_MOD_HRAMP    0x08
 #define NX_BLEND_MOD_VRAMP    0x0c
 #define NX_BLEND_MOD_MASK     0x0c
+#define NX_BLEND_EXT          0x10     /* Bits 1:0 select an extended source: */
+#define NX_BLEND_SRC_BC1      0x10     /* BC1 blocks (below), f = 0 where
+                                        * transparent */
 #define NX_BLEND_KEY          0x40     /* s == key: f = 0 */
 #define NX_BLEND_DITHER       0x80
 
@@ -132,10 +141,11 @@ struct nx_accel_s
    * instead of memory when it can: its drawing becomes the operations
    * above aimed at its surface, and showing it a move from the surface to
    * the display.  surface_alloc() returns a negated errno value if there
-   * is no room (the window then uses memory as usual).
+   * is no room (the window then uses memory as usual).  kind says what
+   * it is for (NX_SURFACE_*: for the board's statistics only).
    */
 
-  CODE int  (*surface_alloc)(nxgl_coord_t w, nxgl_coord_t h,
+  CODE int  (*surface_alloc)(nxgl_coord_t w, nxgl_coord_t h, int kind,
                              FAR struct nxgl_point_s *pos);
   CODE void (*surface_free)(FAR const struct nxgl_point_s *pos,
                             nxgl_coord_t w, nxgl_coord_t h);
@@ -177,7 +187,38 @@ struct nx_accel_s
    */
 
   CODE void (*flip)(FAR const struct nxgl_point_s *origin);
+
+  /* Parking, optional (NULL): keep the pixels of a surface whose window
+   * is not seen in less of the hardware's memory (compressed, losslessly)
+   * and put them back.  park() takes the w x h pixels at pos into a block
+   * of its own and returns its handle (> 0), or a negated errno value if
+   * there is no room for it or it would not be smaller; the caller then
+   * frees the surface.  unpark() puts them into the surface at pos (of
+   * the same size) and frees the block (a negated errno value if the
+   * block was lost: a display mode left no room for it); park_free()
+   * only frees it.
+   * park_size() is the memory the block takes (pixels' worth).
+   */
+
+  CODE int  (*park)(FAR const struct nxgl_point_s *pos, nxgl_coord_t w,
+                    nxgl_coord_t h);
+  CODE int  (*unpark)(int handle, FAR const struct nxgl_point_s *pos);
+  CODE void (*park_free)(int handle);
+  CODE uint32_t (*park_size)(int handle);
+
+  uint32_t flags;                      /* NX_ACCEL_* */
 };
+
+/* nx_accel_s flags */
+
+#define NX_ACCEL_BC1          0x01     /* blend() has NX_BLEND_SRC_BC1 */
+
+/* surface_alloc() kinds */
+
+#define NX_SURFACE_WINDOW     0        /* A window's pixels */
+#define NX_SURFACE_BUFFER     1        /* A display buffer */
+#define NX_SURFACE_STAGE      2        /* Staging for windows in memory */
+#define NX_SURFACE_IMAGE      3        /* A window of image data (BC1) */
 
 /****************************************************************************
  * Public Function Prototypes

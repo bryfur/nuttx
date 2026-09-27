@@ -69,6 +69,10 @@
 #define NXBE_WINDOW_HIDDEN    (1 << 4) /* Bit 4: Window is hidden */
 #define NXBE_WINDOW_LAYER     (1 << 5) /* Bit 5: No pixels: drawn from a display
                                         *        list (CONFIG_NX_COMPOSITOR) */
+#define NXBE_WINDOW_IMAGE     (1 << 6) /* Bit 6: Its pixels are image data (BC1
+                                        *        blocks, nxaccel.h), a source for
+                                        *        others, never shown itself
+                                        *        (CONFIG_NX_COMPOSITOR) */
 
 /* Valid user flags for different window types.  This is the subset of flags
  * that may be passed with nx_openwindow() or nxtk_openwindow.  Most of the
@@ -82,7 +86,7 @@
 
 #if defined(CONFIG_NX_COMPOSITOR)
 #  define NX_WINDOW_USER      (NXBE_WINDOW_RAMBACKED | NXBE_WINDOW_HIDDEN | \
-                               NXBE_WINDOW_LAYER)
+                               NXBE_WINDOW_LAYER | NXBE_WINDOW_IMAGE)
 #elif defined(CONFIG_NX_RAMBACKED)
 #  define NX_WINDOW_USER      (NXBE_WINDOW_RAMBACKED | NXBE_WINDOW_HIDDEN)
 #else
@@ -96,6 +100,9 @@
 #define NXBE_WINDOW_USER      (NXBE_WINDOW_FRAMED | NX_WINDOW_USER)
 
 /* Helpful flag macros */
+
+#define NXBE_ISIMAGE(wnd) \
+  (((wnd)->flags & NXBE_WINDOW_IMAGE) != 0)
 
 #define NXBE_ISBLOCKED(wnd) \
   (((wnd)->flags & NXBE_WINDOW_BLOCKED) != 0)
@@ -149,6 +156,14 @@
 
 struct nxbe_state_s;
 struct nxmu_conn_s;
+/* nxbe_window_s parked */
+
+#define NXBE_PARK_NONE        0       /* Its pixels are where they are */
+#define NXBE_PARK_STREAM      1       /* Compressed in the hardware */
+#define NXBE_PARK_LOST        2       /* Gone: its client draws it again */
+
+struct nxbe_srccache_s;
+
 struct nxbe_window_s
 {
   /* State information */
@@ -188,9 +203,22 @@ struct nxbe_window_s
   /* Or, instead of fbmem, a surface of the display hardware (nxaccel.h) */
 
   bool surface;                       /* The pixels are in the surface */
+  uint8_t surfkind;                   /* NX_SURFACE_* (nxaccel.h) */
   struct nxgl_point_s surfpos;        /* Where the surface is */
   struct nxgl_size_s surfsize;        /* Its size (the window's, when made) */
-  FAR struct nxbe_window_s *surfnext; /* The server's list of them */
+  FAR struct nxbe_window_s *surfnext; /* The server's list of RAM-backed
+                                       * windows */
+
+  /* Parked (CONFIG_NX_COMPOSITOR): a window not seen for a while gives
+   * up its surface: its pixels compressed (parkhandle), or dropped, to be
+   * drawn again by its client when it is seen (NXBE_PARK_LOST)
+   */
+
+  uint8_t parked;                     /* NXBE_PARK_* */
+  int parkhandle;                     /* NXBE_PARK_STREAM: the block */
+  uint32_t unseen;                    /* When it was last seen (ticks),
+                                       * 0: it is seen now */
+  FAR struct nxbe_srccache_s *srccache; /* Pixels of it read back */
 #endif
 #endif
 

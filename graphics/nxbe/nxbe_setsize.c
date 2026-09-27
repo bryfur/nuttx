@@ -110,6 +110,21 @@ static void nxbe_realloc(FAR struct nxbe_window_s *wnd,
        * its client is asked to redraw it, as for any other window.
        */
 
+#ifdef CONFIG_NX_COMPOSITOR
+      /* Parked: it stays so, at the new size (its client draws all of it
+       * when it is seen again)
+       */
+
+      if (wnd->parked != NXBE_PARK_NONE)
+        {
+          nxbe_surface_touch(wnd);
+          wnd->stride     = newstride;
+          wnd->surfsize.w = newwidth;
+          wnd->surfsize.h = newheight;
+          return;
+        }
+#endif
+
       if (wnd->surface)
         {
           bool lost;

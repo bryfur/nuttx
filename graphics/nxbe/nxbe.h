@@ -339,8 +339,17 @@ void nxbe_accel_flush(void);
  * moved elsewhere (false: no room, gone), all moved out of a rectangle
  * (the display, grown), given up for memory, freed, and shown (dest in
  * window coordinates, clipped by the windows above).  When there is no
- * room for one, the compositor's second display buffer is given up, then
- * the surfaces are packed together, before a window goes to memory.
+ * room for one, windows that are not seen are parked, the compositor's
+ * second display buffer is given up, then the surfaces are packed
+ * together, before a window goes to memory.  nxbe_surface_list(): all of
+ * them, linked by surfnext.
+ *
+ * Parking (CONFIG_NX_COMPOSITOR): a window gives up its surface, its
+ * pixels compressed by the hardware or dropped (park); drawn into while
+ * parked, its compressed pixels are dropped too (touch); seen again, it
+ * gets a surface back and its pixels, or its client is asked to draw it
+ * (unpark).  Windows in memory move into surfaces when there is room
+ * (frommemory).
  */
 
 #ifdef CONFIG_NX_RAMBACKED
@@ -352,6 +361,13 @@ void nxbe_surface_tomemory(FAR struct nxbe_window_s *wnd);
 void nxbe_surface_close(FAR struct nxbe_window_s *wnd);
 void nxbe_surface_present(FAR struct nxbe_window_s *wnd,
                           FAR const struct nxgl_rect_s *dest);
+FAR struct nxbe_window_s *nxbe_surface_list(void);
+#ifdef CONFIG_NX_COMPOSITOR
+bool nxbe_surface_park(FAR struct nxbe_window_s *wnd);
+void nxbe_surface_touch(FAR struct nxbe_window_s *wnd);
+void nxbe_surface_unpark(FAR struct nxbe_window_s *wnd);
+int  nxbe_surface_frommemory(void);
+#endif
 #endif
 #endif
 
@@ -399,6 +415,45 @@ void nxbe_compose_setlut(int slot,
 void nxbe_compose_memops(FAR struct nxbe_window_s *wnd,
                          FAR const struct nx_gpuop_s *ops, int nops,
                          FAR struct nxgl_rect_s *dirty);
+
+/* Parking: whether a window is seen (not hidden, on the display and not
+ * all covered by opaque windows); the windows, surfaces or parking have
+ * changed (for the statistics); a window's client has been asked to draw
+ * all of it (the next frame waits a little for it); the server is idle:
+ * park windows not seen for a while (returns how many ticks until it
+ * wants to be called again, -1: not unless something changes).
+ */
+
+bool nxbe_compose_seen(FAR struct nxbe_window_s *wnd);
+void nxbe_compose_changed(void);
+void nxbe_compose_redrawing(FAR struct nxbe_window_s *wnd);
+int  nxbe_compose_idle(void);
+
+/* Windows in memory drawing from sources in surfaces (nxbe_compose_mem.c)
+ * keep what they read back of them: drop what a source's drawing (window
+ * coordinates) makes out of date; free all of it; free all copies if no
+ * window is in memory any more
+ */
+
+void nxbe_srccache_drop(FAR struct nxbe_window_s *wnd,
+                        FAR const struct nxgl_rect_s *rel);
+void nxbe_srccache_free(FAR struct nxbe_window_s *wnd);
+void nxbe_srccache_trim(void);
+
+/* Counters for nxbe_compose_stats() */
+
+struct nxbe_counts_s
+{
+  uint32_t frames;
+  uint32_t parks;
+  uint32_t unparks;
+  uint32_t redraws;
+  uint32_t srcread;
+  uint32_t srccached;
+  uint32_t tosurface;
+};
+
+EXTERN struct nxbe_counts_s g_nxbe_counts;
 #endif
 
 /****************************************************************************

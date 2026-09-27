@@ -69,6 +69,10 @@
  ****************************************************************************/
 
 #ifdef CONFIG_NX_ACCEL
+#ifdef CONFIG_NX_COMPOSITOR
+static int g_idlewait = -1;             /* Ticks until nxbe_compose_idle() */
+#endif
+
 static void nxmu_accel_idle(mqd_t mqd)
 {
   struct mq_attr attr;
@@ -89,6 +93,11 @@ static void nxmu_accel_idle(mqd_t mqd)
 
   if (idle)
     {
+#ifdef CONFIG_NX_COMPOSITOR
+      /* Windows not seen for a while give up their surfaces */
+
+      g_idlewait = nxbe_compose_idle();
+#endif
       nxbe_accel_flush();
     }
 }
@@ -482,6 +491,14 @@ int nx_runinstance(FAR const char *mqname, FAR NX_DRIVERTYPE *dev)
         {
           waitms = TICK2MSEC(ticks);
         }
+
+      /* Parking, when it is due */
+
+      if (g_idlewait >= 0 &&
+          (waitms < 0 || TICK2MSEC(g_idlewait) < waitms))
+        {
+          waitms = TICK2MSEC(g_idlewait) > 0 ? TICK2MSEC(g_idlewait) : 1;
+        }
 #endif
 
       if (waitms >= 0)
@@ -489,7 +506,8 @@ int nx_runinstance(FAR const char *mqname, FAR NX_DRIVERTYPE *dev)
           struct timespec abstime;
 
           clock_gettime(CLOCK_REALTIME, &abstime);
-          abstime.tv_nsec += waitms * 1000000;
+          abstime.tv_sec  += waitms / 1000;
+          abstime.tv_nsec += (waitms % 1000) * 1000000;
           if (abstime.tv_nsec >= 1000000000)
             {
               abstime.tv_sec++;
@@ -788,7 +806,11 @@ int nx_runinstance(FAR const char *mqname, FAR NX_DRIVERTYPE *dev)
             {
               FAR struct nxsvrmsg_compositor_s *compmsg =
                 (FAR struct nxsvrmsg_compositor_s *)buffer;
-              *compmsg->caps = nxbe_compose_on() ? NX_CAP_COMPOSITOR : 0;
+              *compmsg->caps = !nxbe_compose_on() ? 0 :
+                               NX_CAP_COMPOSITOR |
+                               ((g_nxaccel->flags & NX_ACCEL_BC1) != 0 ?
+                                NX_CAP_BC1 : 0) |
+                               (g_nxaccel->park != NULL ? NX_CAP_PARK : 0);
               compmsg->size->w = nxmu.be.vinfo.xres;
               compmsg->size->h = nxmu.be.vinfo.yres;
               nxsem_post(compmsg->sem_done);

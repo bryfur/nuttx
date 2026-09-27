@@ -75,6 +75,7 @@
 #include <debug.h>
 
 #include <nuttx/clock.h>
+#include <nuttx/irq.h>
 #include <nuttx/kmalloc.h>
 #include <nuttx/nx/nxaccel.h>
 #include <nuttx/nx/nxcompose.h>
@@ -98,6 +99,13 @@
 #define NXCOMP_MAXPIECES  32      /* Buffer age: pieces of one rectangle */
 #define NXCOMP_MAXADD     64      /* Damage from moves, in one frame */
 #define NXCOMP_STAGEH     16      /* Staging: lines of a window in memory */
+#define NXCOMP_MAXCOVER   24      /* Parking: opaque windows over one */
+#define NXCOMP_IDLEPOLL   MSEC2TICK(50)    /* Parking: looked at so often */
+#define NXCOMP_QUIET      MSEC2TICK(400)   /* ... and not while windows move */
+#define NXCOMP_PARKHIDDEN MSEC2TICK(500)   /* ... hidden so long */
+#define NXCOMP_PARKCOVER  MSEC2TICK(2000)  /* ... covered so long */
+#define NXCOMP_REDRAWHOLD MSEC2TICK(50)    /* A window being drawn again:
+                                            * the frame waits for it */
 
 /****************************************************************************
  * Private Types
@@ -136,6 +144,12 @@ struct nxcomp_s
   struct nxgl_size_s stagesize;
   clock_t since;                          /* When the oldest damage came */
   clock_t lastflip;
+  clock_t lastmove;                       /* When a window last moved */
+  clock_t lastidle;                       /* Parking: looked at then */
+  clock_t holduntil;                      /* A frame waits until then */
+  bool hold;                              /* ... for windows being drawn */
+  bool changed;                           /* The statistics are old */
+  uint16_t nparked;                       /* Windows parked */
   int ndamage;
   int nprev;
   int nmoves;
@@ -150,6 +164,18 @@ struct nxcomp_s
  ****************************************************************************/
 
 static struct nxcomp_s g_comp;
+
+/* The state of the windows, for nxbe_compose_stats() (another thread):
+ * made by the server when it has changed
+ */
+
+static struct nx_compose_stats_s g_snap;
+
+/****************************************************************************
+ * Public Data
+ ****************************************************************************/
+
+struct nxbe_counts_s g_nxbe_counts;
 
 /****************************************************************************
  * Private Functions
@@ -346,7 +372,8 @@ static inline bool wnd_round(FAR struct nxbe_window_s *wnd)
 
 static inline bool wnd_pixels(FAR struct nxbe_window_s *wnd)
 {
-  return !NXBE_ISLAYER(wnd) && (wnd->surface || wnd->fbmem != NULL);
+  return !NXBE_ISLAYER(wnd) && !NXBE_ISIMAGE(wnd) &&
+         (wnd->surface || wnd->fbmem != NULL);
 }
 
 /* The shadow's inner rectangle (the window's rounded rectangle, inset by
@@ -642,6 +669,7 @@ static bool comp_stage(void)
         }
 
       g_comp.stage = g_nxaccel->surface_alloc(w, NXCOMP_STAGEH,
+                                              NX_SURFACE_STAGE,
                                               &g_comp.stagepos) >= 0;
       g_comp.stagesize.w = w;
       g_comp.stagesize.h = NXCOMP_STAGEH;
@@ -871,7 +899,9 @@ static void comp_gpuop_do(FAR const struct nx_gpuop_s *op,
   struct nx_blend_s b;
   uint8_t smode = op->mode & NX_BLEND_SRC_MASK;
   bool image = op->op == NX_GPUOP_COPY ||
-               (op->op == NX_GPUOP_BLEND && smode != NX_BLEND_SRC_COLOUR);
+               (op->op == NX_GPUOP_BLEND &&
+                (smode != NX_BLEND_SRC_COLOUR ||
+                 (op->mode & NX_BLEND_EXT) != 0));
 
   switch (op->op)
     {
@@ -1004,9 +1034,13 @@ static void comp_gpuop(FAR struct nxbe_window_s *wnd,
   struct nxgl_point_s spos;
   uint8_t smode = op->mode & NX_BLEND_SRC_MASK;
   bool image = op->op == NX_GPUOP_COPY ||
-               (op->op == NX_GPUOP_BLEND && smode != NX_BLEND_SRC_COLOUR);
+               (op->op == NX_GPUOP_BLEND &&
+                (smode != NX_BLEND_SRC_COLOUR ||
+                 (op->mode & NX_BLEND_EXT) != 0));
 
-  if (op->w <= 0 || op->h <= 0)
+  if (op->w <= 0 || op->h <= 0 ||
+      (op->op == NX_GPUOP_BLEND && (op->mode & NX_BLEND_EXT) != 0 &&
+       (g_nxaccel->flags & NX_ACCEL_BC1) == 0))
     {
       return;
     }
@@ -1024,12 +1058,23 @@ static void comp_gpuop(FAR struct nxbe_window_s *wnd,
       src = op->src != NULL ? (FAR struct nxbe_window_s *)op->src : wnd;
       if (!src->surface)
         {
-          comp_gpuop_mem(src, op, org, &whole, &dest);
+          /* In memory (or parked): a BC1 image is not drawn from there */
+
+          if ((op->mode & NX_BLEND_EXT) == 0)
+            {
+              comp_gpuop_mem(src, op, org, &whole, &dest);
+            }
+
           return;
         }
 
+      /* A BC1 image's pixels are in the hardware's memory seen four times
+       * as tall
+       */
+
       spos.x = src->surfpos.x + op->sx + dest.pt1.x - whole.pt1.x;
-      spos.y = src->surfpos.y + op->sy + dest.pt1.y - whole.pt1.y;
+      spos.y = ((op->mode & NX_BLEND_EXT) != 0 ? 4 * src->surfpos.y :
+                src->surfpos.y) + op->sy + dest.pt1.y - whole.pt1.y;
     }
 
   comp_gpuop_do(op, org, &dest, &spos);
@@ -1312,7 +1357,8 @@ static void comp_getback(void)
 
   g_comp.retry = false;
   if (g_comp.dbuf || g_nxaccel->flip == NULL ||
-      g_nxaccel->surface_alloc(be->vinfo.xres, be->vinfo.yres, &pos) < 0)
+      g_nxaccel->surface_alloc(be->vinfo.xres, be->vinfo.yres,
+                               NX_SURFACE_BUFFER, &pos) < 0)
     {
       return;
     }
@@ -1560,6 +1606,160 @@ static int comp_moves(FAR struct nxcomp_copy_s *copy)
     }
 
   return ncopy;
+}
+
+/* Parking ******************************************************************/
+
+/* Whether any of a window is seen: it is not hidden, some of it is on the
+ * display, and not all of that is covered by the opaque windows above it
+ * (their round corners do not cover)
+ */
+
+static bool comp_seen(FAR struct nxbe_window_s *wnd)
+{
+  struct nxgl_rect_s cover[NXCOMP_MAXCOVER];
+  struct nxgl_rect_s piece[NXCOMP_MAXPIECES];
+  FAR struct nxbe_window_s *a;
+  FAR const struct nxgl_rect_s *b;
+  struct nxgl_rect_s r;
+  int n = 0;
+
+  if (NXBE_ISHIDDEN(wnd))
+    {
+      return false;
+    }
+
+  nxgl_rectintersect(&r, &wnd->bounds, &g_comp.be->bkgd.bounds);
+  if (rect_empty(&r))
+    {
+      return false;
+    }
+
+  for (a = wnd->above; a != NULL; a = a->above)
+    {
+      b = &a->bounds;
+      if (!wnd_pixels(a) || a->fx.opacity != 255 ||
+          (a->fx.flags & NX_FX_KEY) != 0 ||
+          !nxgl_rectoverlap(&r, (FAR struct nxgl_rect_s *)b))
+        {
+          continue;
+        }
+
+      if (n + 2 > NXCOMP_MAXCOVER)
+        {
+          return true;                  /* Too many to tell: seen */
+        }
+
+      if (wnd_round(a))
+        {
+          rect_set(&cover[n++], b->pt1.x + NXCOMP_R, b->pt1.y,
+                   b->pt2.x - NXCOMP_R, b->pt2.y);
+          rect_set(&cover[n++], b->pt1.x, b->pt1.y + NXCOMP_R,
+                   b->pt2.x, b->pt2.y - NXCOMP_R);
+        }
+      else
+        {
+          cover[n++] = *b;
+        }
+    }
+
+  return rect_cut(&r, cover, n, piece) != 0;
+}
+
+/* The state of the windows, for the statistics */
+
+static void comp_snapshot(void)
+{
+  FAR struct nxbe_window_s *wnd;
+  struct nx_compose_stats_s st;
+  irqstate_t flags;
+
+  memset(&st, 0, sizeof(st));
+  st.on   = g_comp.on;
+  st.dbuf = g_comp.dbuf;
+  for (wnd = nxbe_surface_list(); wnd != NULL; wnd = wnd->surfnext)
+    {
+      uint32_t px = (uint32_t)(wnd->bounds.pt2.x - wnd->bounds.pt1.x + 1) *
+                    (uint32_t)(wnd->bounds.pt2.y - wnd->bounds.pt1.y + 1);
+
+      if (wnd->surface)
+        {
+          px = (uint32_t)wnd->surfsize.w * wnd->surfsize.h;
+          st.nsurf++;
+          st.surfpx += px;
+          if (wnd->surfkind == NX_SURFACE_IMAGE)
+            {
+              st.nimage++;
+              st.imagepx += px;
+            }
+        }
+      else if (wnd->parked == NXBE_PARK_STREAM)
+        {
+          st.nparked++;
+          st.parkedpx += (uint32_t)wnd->surfsize.w * wnd->surfsize.h;
+          if (g_nxaccel->park_size != NULL)
+            {
+              st.parkedsize += g_nxaccel->park_size(wnd->parkhandle);
+            }
+        }
+      else if (wnd->parked == NXBE_PARK_LOST)
+        {
+          st.nlost++;
+          st.lostpx += px;
+        }
+      else if (wnd->fbmem != NULL)
+        {
+          st.nmem++;
+          st.membytes += (uint32_t)wnd->stride *
+                         (wnd->bounds.pt2.y - wnd->bounds.pt1.y + 1);
+        }
+    }
+
+  g_comp.nparked = st.nparked + st.nlost;
+  flags  = enter_critical_section();
+  g_snap = st;
+  leave_critical_section(flags);
+  g_comp.changed = false;
+}
+
+/* Before a frame: windows parked that are seen again get their pixels
+ * back; windows in memory go into surfaces if there is room now.  False
+ * if the frame should wait for windows being drawn again.
+ */
+
+static bool comp_unpark(void)
+{
+  FAR struct nxbe_window_s *wnd;
+  clock_t now = clock_systime_ticks();
+
+  if (g_comp.nparked > 0)
+    {
+      for (wnd = nxbe_surface_list(); wnd != NULL; wnd = wnd->surfnext)
+        {
+          if (wnd->parked != NXBE_PARK_NONE && comp_seen(wnd))
+            {
+              nxbe_surface_unpark(wnd);
+            }
+        }
+
+      if (g_comp.changed)
+        {
+          comp_snapshot();
+        }
+    }
+
+  if (g_comp.retry && nxbe_surface_frommemory() > 0)
+    {
+      nxbe_srccache_trim();
+      comp_snapshot();
+    }
+
+  if (g_comp.hold && (int32_t)(g_comp.holduntil - now) <= 0)
+    {
+      g_comp.hold = false;
+    }
+
+  return !g_comp.hold;
 }
 
 /****************************************************************************
@@ -1832,6 +2032,7 @@ void nxbe_compose_setposition(FAR struct nxbe_window_s *wnd,
       return;
     }
 
+  g_comp.lastmove = clock_systime_ticks();
   if (!NXBE_ISHIDDEN(wnd) && wnd->surface && !NXBE_ISLAYER(wnd) &&
       (move_find(wnd) != NULL || g_comp.nmoves < NXCOMP_MAXMOVES))
     {
@@ -2023,6 +2224,14 @@ void nxbe_compose_gpuops(FAR struct nxbe_window_s *wnd,
       return;
     }
 
+  if (wnd->parked != NXBE_PARK_NONE)
+    {
+      /* Parked: drawn again in full when it is seen */
+
+      nxbe_surface_touch(wnd);
+      return;
+    }
+
   if (!wnd->surface)
     {
       /* In memory (no room for a surface): in software */
@@ -2054,6 +2263,11 @@ void nxbe_compose_gpuops(FAR struct nxbe_window_s *wnd,
 
   if (!rect_empty(&dirty))
     {
+      if (wnd->srccache != NULL)
+        {
+          nxbe_srccache_drop(wnd, &dirty);
+        }
+
       nxbe_compose_damage_wrect(wnd, &dirty);
     }
 }
@@ -2074,7 +2288,9 @@ void nxbe_compose_gpuops(FAR struct nxbe_window_s *wnd,
 bool nxbe_compose_due(void)
 {
   return g_comp.on && (g_comp.ndamage > 0 || g_comp.nmoves > 0) &&
-         clock_systime_ticks() - g_comp.since >= NXCOMP_LATENCY;
+         clock_systime_ticks() - g_comp.since >= NXCOMP_LATENCY &&
+         (!g_comp.hold ||
+          (int32_t)(g_comp.holduntil - clock_systime_ticks()) <= 0);
 }
 
 int nxbe_compose_wait(void)
@@ -2085,6 +2301,15 @@ int nxbe_compose_wait(void)
                      !(g_comp.retry && !g_comp.dbuf)))
     {
       return -1;
+    }
+
+  if (g_comp.hold)
+    {
+      elapsed = g_comp.holduntil - clock_systime_ticks();
+      if ((int32_t)elapsed > 0)
+        {
+          return (int)elapsed;
+        }
     }
 
   if (!g_comp.dbuf)
@@ -2106,6 +2331,13 @@ void nxbe_compose_run(void)
   int i;
 
   if (!g_comp.on)
+    {
+      return;
+    }
+
+  /* Windows seen again get their pixels back first */
+
+  if (!comp_unpark())
     {
       return;
     }
@@ -2166,6 +2398,138 @@ void nxbe_compose_run(void)
     }
 
   g_comp.ndamage = 0;
+  g_nxbe_counts.frames++;
+}
+
+/****************************************************************************
+ * Name: nxbe_compose_seen, nxbe_compose_changed, nxbe_compose_redrawing
+ ****************************************************************************/
+
+bool nxbe_compose_seen(FAR struct nxbe_window_s *wnd)
+{
+  return g_comp.on && comp_seen(wnd);
+}
+
+void nxbe_compose_changed(void)
+{
+  g_comp.changed = true;
+}
+
+void nxbe_compose_redrawing(FAR struct nxbe_window_s *wnd)
+{
+  g_comp.hold      = true;
+  g_comp.holduntil = clock_systime_ticks() + NXCOMP_REDRAWHOLD;
+}
+
+/****************************************************************************
+ * Name: nxbe_compose_idle
+ *
+ * Description:
+ *   The server is idle: windows that have not been seen for a while (half
+ *   a second hidden, two seconds covered) and may be parked (NX_FX_PARK)
+ *   are parked, unless windows are being moved (a drag).  Returns how many
+ *   ticks until it should be called again, -1 if only after something
+ *   changes.
+ *
+ ****************************************************************************/
+
+int nxbe_compose_idle(void)
+{
+  FAR struct nxbe_window_s *wnd;
+  clock_t now = clock_systime_ticks();
+  clock_t elapsed = now - g_comp.lastidle;
+  int32_t next = -1;
+  int32_t wait;
+  bool quiet;
+
+  if (!g_comp.on)
+    {
+      return -1;
+    }
+
+  if (g_comp.changed)
+    {
+      nxbe_srccache_trim();
+      comp_snapshot();
+    }
+
+  if (elapsed < NXCOMP_IDLEPOLL)
+    {
+      return (int)(NXCOMP_IDLEPOLL - elapsed);
+    }
+
+  g_comp.lastidle = now;
+  quiet = now - g_comp.lastmove >= NXCOMP_QUIET;
+  for (wnd = nxbe_surface_list(); wnd != NULL; wnd = wnd->surfnext)
+    {
+      uint32_t delay;
+      uint32_t age;
+
+      if ((!wnd->surface && wnd->fbmem == NULL) ||
+          wnd->parked != NXBE_PARK_NONE || NXBE_ISLAYER(wnd))
+        {
+          continue;
+        }
+
+      if (comp_seen(wnd))
+        {
+          wnd->unseen = 0;
+          continue;
+        }
+
+      if (wnd->unseen == 0)
+        {
+          wnd->unseen = (uint32_t)now | 1;
+        }
+
+      if ((wnd->fx.flags & NX_FX_PARK) == 0)
+        {
+          continue;
+        }
+
+      delay = NXBE_ISHIDDEN(wnd) ? NXCOMP_PARKHIDDEN : NXCOMP_PARKCOVER;
+      age   = (uint32_t)now - wnd->unseen;
+      if (age >= delay && quiet)
+        {
+          nxbe_surface_park(wnd);
+          continue;
+        }
+
+      wait = age < delay ? (int32_t)(delay - age) : 0;
+      if (!quiet)
+        {
+          wait = MAX(wait, (int32_t)(NXCOMP_QUIET - (now -
+                                                     g_comp.lastmove)));
+        }
+
+      next = next < 0 ? wait : MIN(next, wait);
+    }
+
+  if (g_comp.changed)
+    {
+      comp_snapshot();
+    }
+
+  return next < 0 ? -1 : MAX(next, (int32_t)NXCOMP_IDLEPOLL);
+}
+
+/****************************************************************************
+ * Name: nxbe_compose_stats
+ ****************************************************************************/
+
+void nxbe_compose_stats(FAR struct nx_compose_stats_s *st)
+{
+  irqstate_t flags = enter_critical_section();
+
+  *st = g_snap;
+  leave_critical_section(flags);
+  st->frames    = g_nxbe_counts.frames;
+  st->parks     = g_nxbe_counts.parks;
+  st->unparks   = g_nxbe_counts.unparks;
+  st->redraws   = g_nxbe_counts.redraws;
+  st->srcread   = g_nxbe_counts.srcread;
+  st->srccached = g_nxbe_counts.srccached;
+  st->tosurface = g_nxbe_counts.tosurface;
 }
 
 #endif /* CONFIG_NX_COMPOSITOR */

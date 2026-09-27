@@ -74,10 +74,21 @@
 
 #define NX_FX_ROUND            0x01    /* Round corners (NX_COMPOSITOR_RADIUS) */
 #define NX_FX_KEY              0x02    /* Pixels of colour key are clear */
+#define NX_FX_PARK             0x04    /* May give up its pixels while it
+                                        * is not seen (hidden, or covered
+                                        * by opaque windows): they are kept
+                                        * compressed if the hardware can,
+                                        * else its client is asked to draw
+                                        * it again when it is seen */
 
 /* nx_compositor() capabilities */
 
 #define NX_CAP_COMPOSITOR      0x01    /* The display is composited */
+#define NX_CAP_BC1             0x02    /* Blends from BC1 images
+                                        * (NX_BLEND_SRC_BC1, image windows:
+                                        * NXBE_WINDOW_IMAGE) */
+#define NX_CAP_PARK            0x04    /* Parked windows are kept
+                                        * compressed (NX_FX_PARK) */
 
 /* nx_gpuop_s op */
 
@@ -113,7 +124,10 @@ struct nx_effects_s
  * mode reading one) is src at (sx, sy): a window with a surface (NULL:
  * this window), typically a hidden one holding a glyph atlas or icons.
  * Shape parameters p[] (NX_BLEND_MOD_*, nxaccel.h) are in window
- * coordinates too.
+ * coordinates too.  A BC1 source (NX_BLEND_SRC_BC1) is an image window
+ * (NXBE_WINDOW_IMAGE, hidden) of W x H/4 pixels holding a W x H image's
+ * blocks, a row of blocks per row (DXT1's 8 bytes a block, as its pixels:
+ * put there with nx_bitmap()); (sx, sy) is a pixel of the W x H image.
  */
 
 struct nx_gpuop_s
@@ -134,6 +148,35 @@ struct nx_gpuop_s
   uint16_t key;                  /* NX_BLEND_KEY */
   int16_t  p[4];                 /* Shape: LUT inner x0, y0, x1, y1;
                                   * ramp origin, step, start */
+};
+
+/* What the compositor is doing (nxbe_compose_stats(), for the board's
+ * statistics): counters since boot and the state now
+ */
+
+struct nx_compose_stats_s
+{
+  uint32_t frames;               /* Composited */
+  bool     on;                   /* Compositing */
+  bool     dbuf;                 /* Double buffered */
+  uint16_t nsurf;                /* Windows in surfaces */
+  uint32_t surfpx;               /* ... their pixels */
+  uint16_t nimage;               /* Of them, image windows (BC1) */
+  uint32_t imagepx;
+  uint16_t nmem;                 /* Windows in memory (no room) */
+  uint32_t membytes;
+  uint16_t nparked;              /* Parked, compressed */
+  uint32_t parkedpx;             /* ... the pixels they had */
+  uint32_t parkedsize;           /* ... what they take now (pixels) */
+  uint16_t nlost;                /* Parked, to be drawn again */
+  uint32_t lostpx;
+  uint32_t parks;                /* Windows parked */
+  uint32_t unparks;              /* ... and put back */
+  uint32_t redraws;              /* ... drawn again by their clients */
+  uint32_t srcread;              /* Memory windows: source pixels read
+                                  * back */
+  uint32_t srccached;            /* ... and found read already */
+  uint32_t tosurface;            /* Memory windows moved into surfaces */
 };
 
 /****************************************************************************
@@ -234,6 +277,16 @@ int nx_gpuops(FAR void *hwnd, FAR const struct nx_gpuop_s *ops, int nops);
 
 int nx_setlut(FAR void *handle, int slot,
               FAR const uint8_t lut[NX_BLEND_LUT_N][NX_BLEND_LUT_N]);
+
+/****************************************************************************
+ * Name: nxbe_compose_stats
+ *
+ * Description:
+ *   The compositor's statistics (kernel: the board's drivers).
+ *
+ ****************************************************************************/
+
+void nxbe_compose_stats(FAR struct nx_compose_stats_s *st);
 
 #undef EXTERN
 #ifdef __cplusplus
