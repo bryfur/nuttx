@@ -31,6 +31,7 @@
 
 #include <dirent.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
 #include <fcntl.h>
@@ -44,6 +45,32 @@
  ****************************************************************************/
 
 #define HOSTFS_RETRY_DELAY_US 10000
+
+/****************************************************************************
+ * Private Types
+ ****************************************************************************/
+
+/* An open directory: its entries read at once and sorted by name, so that
+ * a listing is the same on every host (the host's own order is its file
+ * system's: tests that show `ls` would differ from machine to machine).
+ * Only the host's own functions allocate here (malloc, realloc, free;
+ * strdup() and scandir() would be NuttX's).
+ */
+
+struct host_dirent_s
+{
+  char name[256];
+  unsigned char type;
+  ino_t ino;
+};
+
+struct host_dir_s
+{
+  struct host_dirent_s *ent;
+  int n;
+  int i;
+  char path[1];                         /* For rewinddir() */
+};
 
 /****************************************************************************
  * Private Functions
@@ -557,11 +584,78 @@ int host_ftruncate(int fd, nuttx_off_t length)
  * Name: host_opendir
  ****************************************************************************/
 
+static int host_dirent_cmp(const void *a, const void *b)
+{
+  return strcmp(((const struct host_dirent_s *)a)->name,
+                ((const struct host_dirent_s *)b)->name);
+}
+
+static int host_dir_scan(struct host_dir_s *d)
+{
+  struct dirent *ent;
+  DIR *dir;
+  int cap = 0;
+
+  free(d->ent);
+  d->ent = NULL;
+  d->n   = 0;
+  d->i   = 0;
+
+  dir = opendir(d->path);
+  if (dir == NULL)
+    {
+      return -1;
+    }
+
+  while ((ent = readdir(dir)) != NULL)
+    {
+      struct host_dirent_s *e;
+
+      if (d->n == cap)
+        {
+          int ncap = cap ? cap * 2 : 32;
+          struct host_dirent_s *ne = realloc(d->ent, ncap * sizeof(*ne));
+
+          if (ne == NULL)
+            {
+              break;
+            }
+
+          d->ent = ne;
+          cap    = ncap;
+        }
+
+      e = &d->ent[d->n++];
+      strncpy(e->name, ent->d_name, sizeof(e->name) - 1);
+      e->name[sizeof(e->name) - 1] = '\0';
+      e->type = ent->d_type;
+      e->ino  = ent->d_ino;
+    }
+
+  closedir(dir);
+  qsort(d->ent, d->n, sizeof(d->ent[0]), host_dirent_cmp);
+  return 0;
+}
+
 void *host_opendir(const char *name)
 {
-  /* Return the host DIR pointer */
+  size_t len = strlen(name);
+  struct host_dir_s *d = malloc(sizeof(*d) + len);
 
-  return (void *)opendir(name);
+  if (d == NULL)
+    {
+      return NULL;
+    }
+
+  memset(d, 0, sizeof(*d));
+  memcpy(d->path, name, len + 1);
+  if (host_dir_scan(d) < 0)
+    {
+      free(d);
+      return NULL;
+    }
+
+  return d;
 }
 
 /****************************************************************************
@@ -570,47 +664,48 @@ void *host_opendir(const char *name)
 
 int host_readdir(void *dirp, struct nuttx_dirent_s *entry)
 {
-  struct dirent *ent;
+  struct host_dir_s *d = dirp;
+  struct host_dirent_s *ent;
 
-  /* Call the host's readdir routine */
+  /* The next of the entries, sorted */
 
-  ent = readdir(dirp);
+  ent = d->i < d->n ? &d->ent[d->i++] : NULL;
   if (ent != NULL)
     {
       /* Copy the entry name */
 
-      strncpy(entry->d_name, ent->d_name, sizeof(entry->d_name) - 1);
+      strncpy(entry->d_name, ent->name, sizeof(entry->d_name) - 1);
       entry->d_name[sizeof(entry->d_name) - 1] = 0;
 
-      entry->d_ino = ent->d_ino;
+      entry->d_ino = ent->ino;
 
       /* Map the type */
 
-      if (ent->d_type == DT_REG)
+      if (ent->type == DT_REG)
         {
           entry->d_type = NUTTX_DTYPE_FILE;
         }
-      else if (ent->d_type == DT_FIFO)
+      else if (ent->type == DT_FIFO)
         {
           entry->d_type = NUTTX_DTYPE_FIFO;
         }
-      else if (ent->d_type == DT_CHR)
+      else if (ent->type == DT_CHR)
         {
           entry->d_type = NUTTX_DTYPE_CHR;
         }
-      else if (ent->d_type == DT_BLK)
+      else if (ent->type == DT_BLK)
         {
           entry->d_type = NUTTX_DTYPE_BLK;
         }
-      else if (ent->d_type == DT_DIR)
+      else if (ent->type == DT_DIR)
         {
           entry->d_type = NUTTX_DTYPE_DIRECTORY;
         }
-      else if (ent->d_type == DT_LNK)
+      else if (ent->type == DT_LNK)
         {
           entry->d_type = NUTTX_DTYPE_LINK;
         }
-      else if (ent->d_type == DT_SOCK)
+      else if (ent->type == DT_SOCK)
         {
           entry->d_type = NUTTX_DTYPE_SOCK;
         }
@@ -631,9 +726,11 @@ int host_readdir(void *dirp, struct nuttx_dirent_s *entry)
 
 void host_rewinddir(void *dirp)
 {
-  /* Just call the rewinddir routine */
+  struct host_dir_s *d = dirp;
 
-  rewinddir(dirp);
+  /* Read it again: what it holds now */
+
+  host_dir_scan(d);
 }
 
 /****************************************************************************
@@ -642,14 +739,11 @@ void host_rewinddir(void *dirp)
 
 int host_closedir(void *dirp)
 {
-  int ret = closedir(dirp);
+  struct host_dir_s *d = dirp;
 
-  if (ret < 0)
-    {
-      ret = host_errno_convert(-errno);
-    }
-
-  return ret;
+  free(d->ent);
+  free(d);
+  return 0;
 }
 
 /****************************************************************************
