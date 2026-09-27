@@ -64,11 +64,17 @@
 #define MIXIOC_SETLEVEL      _AUDIOIOC(0x64)  /* struct fpcmix_level_s * */
 #define MIXIOC_GETLEVELS     _AUDIOIOC(0x65)  /* struct fpcmix_levels_s * */
 
-/* ioctl on a /dev/audio/pcmN: the name it is listed under, and whose
- * application level applies (the task's name until set)
+/* ioctls on a /dev/audio/pcmN.  SETNAME: the name it is listed under, and
+ * whose application level applies (the task's name until set); it also
+ * claims a free channel (-EBUSY if another program has it).  PAUSE and
+ * FLUSH are for a program that writes: PAUSE holds the channel (1) or
+ * lets it go on (0), fading; FLUSH drops what is written and not yet
+ * played (a fade, a seek), and a write() that waits returns.
  */
 
 #define MIXIOC_SETNAME       _AUDIOIOC(0x68)  /* const char * */
+#define MIXIOC_PAUSE         _AUDIOIOC(0x69)  /* int: 1 pause, 0 go on */
+#define MIXIOC_FLUSH         _AUDIOIOC(0x6a)  /* - */
 
 /****************************************************************************
  * Public Types
