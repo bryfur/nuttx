@@ -106,6 +106,8 @@
 #define NXCOMP_PARKCOVER  MSEC2TICK(2000)  /* ... covered so long */
 #define NXCOMP_REDRAWHOLD MSEC2TICK(50)    /* A window being drawn again:
                                             * the frame waits for it */
+#define NXCOMP_PACKAGAIN  MSEC2TICK(5000)  /* Surfaces packed for a second
+                                            * buffer at most this often */
 
 /****************************************************************************
  * Private Types
@@ -149,6 +151,8 @@ struct nxcomp_s
   clock_t holduntil;                      /* A frame waits until then */
   bool hold;                              /* ... for windows being drawn */
   bool changed;                           /* The statistics are old */
+  bool packed;                            /* Packed for a second buffer */
+  clock_t lastpack;                       /* ... then */
   uint16_t nparked;                       /* Windows parked */
   int ndamage;
   int nprev;
@@ -1346,21 +1350,39 @@ static void comp_flip(int buf)
 }
 
 /* A second display buffer: a surface of the display's size, if there is
- * room.  It holds nothing yet: all of the display is the last frame's
- * change to it.
+ * room (the surfaces packed together for it if they have not been lately,
+ * or pack is set: a display mode moved them).  It holds nothing yet: all
+ * of the display is the last frame's change to it.
  */
 
-static void comp_getback(void)
+static void comp_getback(bool pack)
 {
   FAR struct nxbe_state_s *be = g_comp.be;
   struct nxgl_point_s pos;
 
   g_comp.retry = false;
-  if (g_comp.dbuf || g_nxaccel->flip == NULL ||
-      g_nxaccel->surface_alloc(be->vinfo.xres, be->vinfo.yres,
-                               NX_SURFACE_BUFFER, &pos) < 0)
+  if (g_comp.dbuf || g_nxaccel->flip == NULL)
     {
       return;
+    }
+
+  if (g_nxaccel->surface_alloc(be->vinfo.xres, be->vinfo.yres,
+                               NX_SURFACE_BUFFER, &pos) < 0)
+    {
+      if (!pack && g_comp.packed &&
+          clock_systime_ticks() - g_comp.lastpack < NXCOMP_PACKAGAIN)
+        {
+          return;
+        }
+
+      nxbe_surface_compact();
+      g_comp.packed   = true;
+      g_comp.lastpack = clock_systime_ticks();
+      if (g_nxaccel->surface_alloc(be->vinfo.xres, be->vinfo.yres,
+                                   NX_SURFACE_BUFFER, &pos) < 0)
+        {
+          return;
+        }
     }
 
   g_comp.buf[1]    = pos;
@@ -1803,7 +1825,7 @@ void nxbe_compose_install(FAR struct nxbe_state_s *be)
     }
 
   g_comp.on = true;
-  comp_getback();
+  comp_getback(false);
 }
 
 bool nxbe_compose_on(void)
@@ -1876,7 +1898,7 @@ void nxbe_compose_setmode(bool begin)
       return;
     }
 
-  comp_getback();
+  comp_getback(true);
   g_comp.nprev = 0;                      /* All of it is drawn anyway */
   nxbe_compose_damage(&g_comp.be->bkgd.bounds);
 }
@@ -2344,7 +2366,7 @@ void nxbe_compose_run(void)
 
   if (g_comp.retry && !g_comp.dbuf)
     {
-      comp_getback();
+      comp_getback(false);
     }
 
   if (g_comp.ndamage == 0 && g_comp.nmoves == 0)

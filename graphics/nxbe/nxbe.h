@@ -362,6 +362,7 @@ void nxbe_surface_close(FAR struct nxbe_window_s *wnd);
 void nxbe_surface_present(FAR struct nxbe_window_s *wnd,
                           FAR const struct nxgl_rect_s *dest);
 FAR struct nxbe_window_s *nxbe_surface_list(void);
+void nxbe_surface_compact(void);
 #ifdef CONFIG_NX_COMPOSITOR
 bool nxbe_surface_park(FAR struct nxbe_window_s *wnd);
 void nxbe_surface_touch(FAR struct nxbe_window_s *wnd);

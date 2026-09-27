@@ -737,6 +737,20 @@ static bool surf_alloc(FAR struct nxbe_window_s *wnd, nxgl_coord_t w,
   return true;
 }
 
+/****************************************************************************
+ * Name: nxbe_surface_compact
+ *
+ * Description:
+ *   Pack the surfaces together (for the compositor's second display
+ *   buffer).
+ *
+ ****************************************************************************/
+
+void nxbe_surface_compact(void)
+{
+  surf_compact();
+}
+
 static bool surf_open(FAR struct nxbe_window_s *wnd, bool make)
 {
   struct nxgl_point_s pos;
