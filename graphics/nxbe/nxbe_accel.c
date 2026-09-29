@@ -251,7 +251,7 @@ static void accel_copyrectangle(FAR NX_PLANEINFOTYPE *pinfo,
  * surface, the board's operations on the surface (window coordinates plus
  * the surface's position); otherwise the memory rasterizers.  A parked
  * window's drawing goes nowhere: its client draws all of it again when it
- * is seen (nxbe_surface_touch()).
+ * is seen (nxbe_surface_unpark()).
  */
 
 static void surf_rect(FAR struct nxbe_window_s *wnd,
@@ -264,14 +264,10 @@ static void surf_rect(FAR struct nxbe_window_s *wnd,
 static inline bool pwfb_parked(FAR struct nxbe_window_s *wnd)
 {
 #ifdef CONFIG_NX_COMPOSITOR
-  if (wnd->parked != NXBE_PARK_NONE)
-    {
-      nxbe_surface_touch(wnd);
-      return true;
-    }
-#endif
-
+  return wnd->parked;
+#else
   return false;
+#endif
 }
 
 /* Its surface is drawn into (window coordinates): copies of it read back
@@ -826,12 +822,7 @@ void nxbe_surface_close(FAR struct nxbe_window_s *wnd)
     }
 
 #ifdef CONFIG_NX_COMPOSITOR
-  if (wnd->parked == NXBE_PARK_STREAM && g_nxaccel->park_free != NULL)
-    {
-      g_nxaccel->park_free(wnd->parkhandle);
-    }
-
-  wnd->parked = NXBE_PARK_NONE;
+  wnd->parked = false;
   nxbe_srccache_free(wnd);
   nxbe_compose_changed();
 #endif
@@ -1028,7 +1019,7 @@ void nxbe_surface_evacuate(FAR const struct nxgl_rect_s *keep)
 
       if ((big->fx.flags & NX_FX_PARK) != 0 && !nxbe_compose_seen(big))
         {
-          big->parked = NXBE_PARK_LOST;
+          big->parked = true;
           g_nxbe_counts.parks++;
           continue;
         }
@@ -1074,18 +1065,15 @@ void nxbe_surface_tomemory(FAR struct nxbe_window_s *wnd)
  * Name: nxbe_surface_park
  *
  * Description:
- *   A window that is not seen gives up its surface: its pixels go into a
- *   compressed block of the hardware's (nx_accel_s park) if it has them
- *   and room for one, else they are dropped, and its client will be asked
- *   to draw it again when it is seen.
+ *   A window that is not seen gives up its surface (or its memory): its
+ *   pixels are dropped, and its client will be asked to draw it again when
+ *   it is seen.
  *
  ****************************************************************************/
 
 bool nxbe_surface_park(FAR struct nxbe_window_s *wnd)
 {
-  int handle = -ENOSYS;
-
-  if (wnd->parked != NXBE_PARK_NONE)
+  if (wnd->parked)
     {
       return false;
     }
@@ -1100,52 +1088,19 @@ bool nxbe_surface_park(FAR struct nxbe_window_s *wnd)
         }
 
       kumm_free(wnd->fbmem);
-      wnd->fbmem  = NULL;
-      wnd->parked = NXBE_PARK_LOST;
-      g_nxbe_counts.parks++;
-      nxbe_compose_changed();
-      return true;
+      wnd->fbmem = NULL;
     }
-
-  if (g_nxaccel->park != NULL)
+  else
     {
-      handle = g_nxaccel->park(&wnd->surfpos, wnd->surfsize.w,
-                               wnd->surfsize.h);
+      nxbe_srccache_free(wnd);
+      surf_free(wnd);
     }
 
-  nxbe_srccache_free(wnd);
-  surf_free(wnd);
-  wnd->parked     = handle > 0 ? NXBE_PARK_STREAM : NXBE_PARK_LOST;
-  wnd->parkhandle = handle > 0 ? handle : 0;
+  wnd->parked = true;
   g_nxbe_counts.parks++;
   nxbe_compose_changed();
-  ginfo("Parked %p (%dx%d): %s\n", wnd, wnd->surfsize.w, wnd->surfsize.h,
-        handle > 0 ? "compressed" : "to be drawn again");
+  ginfo("Parked %p (%dx%d)\n", wnd, wnd->surfsize.w, wnd->surfsize.h);
   return true;
-}
-
-/****************************************************************************
- * Name: nxbe_surface_touch
- *
- * Description:
- *   A parked window is drawn into: its compressed pixels are out of date,
- *   and go.  It will be drawn again in full when it is seen.
- *
- ****************************************************************************/
-
-void nxbe_surface_touch(FAR struct nxbe_window_s *wnd)
-{
-  if (wnd->parked == NXBE_PARK_STREAM)
-    {
-      if (g_nxaccel->park_free != NULL)
-        {
-          g_nxaccel->park_free(wnd->parkhandle);
-        }
-
-      wnd->parked     = NXBE_PARK_LOST;
-      wnd->parkhandle = 0;
-      nxbe_compose_changed();
-    }
 }
 
 /****************************************************************************
@@ -1153,46 +1108,27 @@ void nxbe_surface_touch(FAR struct nxbe_window_s *wnd)
  *
  * Description:
  *   A parked window is seen again: a surface for it (making room, as for
- *   a new window), its pixels put back, or its client asked to draw it
- *   again.  With no room at all, it goes to memory.
+ *   a new window), and its client asked to draw it again.  With no room
+ *   at all, it goes to memory.
  *
  ****************************************************************************/
 
 void nxbe_surface_unpark(FAR struct nxbe_window_s *wnd)
 {
   struct nxgl_rect_s rect;
-  uint8_t parked = wnd->parked;
-  bool sized;
 
-  if (parked == NXBE_PARK_NONE)
+  if (!wnd->parked)
     {
       return;
     }
 
   /* Other windows may be parked to make room, not this one */
 
-  sized = wnd->surfsize.w == wnd->bounds.pt2.x - wnd->bounds.pt1.x + 1 &&
-          wnd->surfsize.h == wnd->bounds.pt2.y - wnd->bounds.pt1.y + 1;
-  wnd->parked = NXBE_PARK_NONE;
+  wnd->parked = false;
   wnd->unseen = 0;
   g_nxbe_counts.unparks++;
   if (surf_open(wnd, true))
     {
-      if (parked == NXBE_PARK_STREAM && sized && g_nxaccel->unpark != NULL)
-        {
-          int ret = g_nxaccel->unpark(wnd->parkhandle, &wnd->surfpos);
-
-          wnd->parkhandle = 0;
-          if (ret >= 0)
-            {
-              nxbe_compose_changed();
-              nxbe_compose_damage_window(wnd);
-              return;
-            }
-
-          parked = NXBE_PARK_LOST;          /* The block is gone */
-        }
-
       rect.pt1   = wnd->surfpos;
       rect.pt2.x = wnd->surfpos.x + wnd->surfsize.w - 1;
       rect.pt2.y = wnd->surfpos.y + wnd->surfsize.h - 1;
@@ -1211,13 +1147,6 @@ void nxbe_surface_unpark(FAR struct nxbe_window_s *wnd)
         }
     }
 
-  if (parked == NXBE_PARK_STREAM && g_nxaccel->park_free != NULL)
-    {
-      g_nxaccel->park_free(wnd->parkhandle);
-    }
-
-  wnd->parkhandle = 0;
-  g_nxbe_counts.redraws++;
   nxbe_compose_changed();
   nxbe_compose_redrawing(wnd);
   nxmu_redrawreq(wnd, &wnd->bounds);
@@ -1251,7 +1180,7 @@ int nxbe_surface_frommemory(void)
           for (wnd = g_ramwnds; wnd != NULL; wnd = wnd->surfnext)
             {
               if (wnd->surface || wnd->fbmem == NULL ||
-                  !NXBE_ISRAMBACKED(wnd) || wnd->parked != NXBE_PARK_NONE ||
+                  !NXBE_ISRAMBACKED(wnd) || wnd->parked ||
                   wnd->be->plane[0].pinfo.bpp != 16 ||
                   nxbe_compose_seen(wnd) != (pass == 0))
                 {

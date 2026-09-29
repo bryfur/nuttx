@@ -1718,19 +1718,10 @@ static void comp_snapshot(void)
               st.imagepx += px;
             }
         }
-      else if (wnd->parked == NXBE_PARK_STREAM)
+      else if (wnd->parked)
         {
           st.nparked++;
-          st.parkedpx += (uint32_t)wnd->surfsize.w * wnd->surfsize.h;
-          if (g_nxaccel->park_size != NULL)
-            {
-              st.parkedsize += g_nxaccel->park_size(wnd->parkhandle);
-            }
-        }
-      else if (wnd->parked == NXBE_PARK_LOST)
-        {
-          st.nlost++;
-          st.lostpx += px;
+          st.parkedpx += px;
         }
       else if (wnd->fbmem != NULL)
         {
@@ -1740,16 +1731,17 @@ static void comp_snapshot(void)
         }
     }
 
-  g_comp.nparked = st.nparked + st.nlost;
+  g_comp.nparked = st.nparked;
   flags  = enter_critical_section();
   g_snap = st;
   leave_critical_section(flags);
   g_comp.changed = false;
 }
 
-/* Before a frame: windows parked that are seen again get their pixels
- * back; windows in memory go into surfaces if there is room now.  False
- * if the frame should wait for windows being drawn again.
+/* Before a frame: windows parked that are seen again get a surface back
+ * and are drawn again; windows in memory go into surfaces if there is
+ * room now.  False if the frame should wait for windows being drawn
+ * again.
  */
 
 static bool comp_unpark(void)
@@ -1761,7 +1753,7 @@ static bool comp_unpark(void)
     {
       for (wnd = nxbe_surface_list(); wnd != NULL; wnd = wnd->surfnext)
         {
-          if (wnd->parked != NXBE_PARK_NONE && comp_seen(wnd))
+          if (wnd->parked && comp_seen(wnd))
             {
               nxbe_surface_unpark(wnd);
             }
@@ -2249,11 +2241,10 @@ void nxbe_compose_gpuops(FAR struct nxbe_window_s *wnd,
       return;
     }
 
-  if (wnd->parked != NXBE_PARK_NONE)
+  if (wnd->parked)
     {
       /* Parked: drawn again in full when it is seen */
 
-      nxbe_surface_touch(wnd);
       return;
     }
 
@@ -2508,7 +2499,7 @@ int nxbe_compose_idle(void)
       uint32_t age;
 
       if ((!wnd->surface && wnd->fbmem == NULL) ||
-          wnd->parked != NXBE_PARK_NONE || NXBE_ISLAYER(wnd))
+          wnd->parked || NXBE_ISLAYER(wnd))
         {
           continue;
         }
@@ -2568,7 +2559,6 @@ void nxbe_compose_stats(FAR struct nx_compose_stats_s *st)
   st->frames    = g_nxbe_counts.frames;
   st->parks     = g_nxbe_counts.parks;
   st->unparks   = g_nxbe_counts.unparks;
-  st->redraws   = g_nxbe_counts.redraws;
   st->srcread   = g_nxbe_counts.srcread;
   st->srccached = g_nxbe_counts.srccached;
   st->tosurface = g_nxbe_counts.tosurface;

@@ -821,8 +821,7 @@ int nx_runinstance(FAR const char *mqname, FAR NX_DRIVERTYPE *dev)
               *compmsg->caps = !nxbe_compose_on() ? 0 :
                                NX_CAP_COMPOSITOR |
                                ((g_nxaccel->flags & NX_ACCEL_BC1) != 0 ?
-                                NX_CAP_BC1 : 0) |
-                               (g_nxaccel->park != NULL ? NX_CAP_PARK : 0);
+                                NX_CAP_BC1 : 0);
               compmsg->size->w = nxmu.be.vinfo.xres;
               compmsg->size->h = nxmu.be.vinfo.yres;
               nxsem_post(compmsg->sem_done);
@@ -876,8 +875,7 @@ int nx_runinstance(FAR const char *mqname, FAR NX_DRIVERTYPE *dev)
               /* A parked window gets its surface back when it is seen */
 
               *surfmsg->result = surfmsg->wnd->surface ||
-                                 surfmsg->wnd->parked != NXBE_PARK_NONE ?
-                                 1 : 0;
+                                 surfmsg->wnd->parked ? 1 : 0;
 #else
               *surfmsg->result = 0;
 #endif

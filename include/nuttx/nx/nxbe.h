@@ -156,12 +156,6 @@
 
 struct nxbe_state_s;
 struct nxmu_conn_s;
-/* nxbe_window_s parked */
-
-#define NXBE_PARK_NONE        0       /* Its pixels are where they are */
-#define NXBE_PARK_STREAM      1       /* Compressed in the hardware */
-#define NXBE_PARK_LOST        2       /* Gone: its client draws it again */
-
 struct nxbe_srccache_s;
 
 struct nxbe_window_s
@@ -210,12 +204,11 @@ struct nxbe_window_s
                                        * windows */
 
   /* Parked (CONFIG_NX_COMPOSITOR): a window not seen for a while gives
-   * up its surface: its pixels compressed (parkhandle), or dropped, to be
-   * drawn again by its client when it is seen (NXBE_PARK_LOST)
+   * up its surface (or memory): its pixels are dropped, to be drawn again
+   * by its client when it is seen
    */
 
-  uint8_t parked;                     /* NXBE_PARK_* */
-  int parkhandle;                     /* NXBE_PARK_STREAM: the block */
+  bool parked;
   uint32_t unseen;                    /* When it was last seen (ticks),
                                        * 0: it is seen now */
   FAR struct nxbe_srccache_s *srccache; /* Pixels of it read back */

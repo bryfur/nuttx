@@ -344,12 +344,10 @@ void nxbe_accel_flush(void);
  * together, before a window goes to memory.  nxbe_surface_list(): all of
  * them, linked by surfnext.
  *
- * Parking (CONFIG_NX_COMPOSITOR): a window gives up its surface, its
- * pixels compressed by the hardware or dropped (park); drawn into while
- * parked, its compressed pixels are dropped too (touch); seen again, it
- * gets a surface back and its pixels, or its client is asked to draw it
- * (unpark).  Windows in memory move into surfaces when there is room
- * (frommemory).
+ * Parking (CONFIG_NX_COMPOSITOR): a window gives up its surface (or its
+ * memory), its pixels dropped (park); seen again, it gets a surface back
+ * and its client is asked to draw it (unpark).  Windows in memory move
+ * into surfaces when there is room (frommemory).
  */
 
 #ifdef CONFIG_NX_RAMBACKED
@@ -365,7 +363,6 @@ FAR struct nxbe_window_s *nxbe_surface_list(void);
 void nxbe_surface_compact(void);
 #ifdef CONFIG_NX_COMPOSITOR
 bool nxbe_surface_park(FAR struct nxbe_window_s *wnd);
-void nxbe_surface_touch(FAR struct nxbe_window_s *wnd);
 void nxbe_surface_unpark(FAR struct nxbe_window_s *wnd);
 int  nxbe_surface_frommemory(void);
 #endif
@@ -448,7 +445,6 @@ struct nxbe_counts_s
   uint32_t frames;
   uint32_t parks;
   uint32_t unparks;
-  uint32_t redraws;
   uint32_t srcread;
   uint32_t srccached;
   uint32_t tosurface;

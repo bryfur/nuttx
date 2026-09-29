@@ -115,9 +115,8 @@ static void nxbe_realloc(FAR struct nxbe_window_s *wnd,
        * when it is seen again)
        */
 
-      if (wnd->parked != NXBE_PARK_NONE)
+      if (wnd->parked)
         {
-          nxbe_surface_touch(wnd);
           wnd->stride     = newstride;
           wnd->surfsize.w = newwidth;
           wnd->surfsize.h = newheight;

@@ -188,24 +188,6 @@ struct nx_accel_s
 
   CODE void (*flip)(FAR const struct nxgl_point_s *origin);
 
-  /* Parking, optional (NULL): keep the pixels of a surface whose window
-   * is not seen in less of the hardware's memory (compressed, losslessly)
-   * and put them back.  park() takes the w x h pixels at pos into a block
-   * of its own and returns its handle (> 0), or a negated errno value if
-   * there is no room for it or it would not be smaller; the caller then
-   * frees the surface.  unpark() puts them into the surface at pos (of
-   * the same size) and frees the block (a negated errno value if the
-   * block was lost: a display mode left no room for it); park_free()
-   * only frees it.
-   * park_size() is the memory the block takes (pixels' worth).
-   */
-
-  CODE int  (*park)(FAR const struct nxgl_point_s *pos, nxgl_coord_t w,
-                    nxgl_coord_t h);
-  CODE int  (*unpark)(int handle, FAR const struct nxgl_point_s *pos);
-  CODE void (*park_free)(int handle);
-  CODE uint32_t (*park_size)(int handle);
-
   uint32_t flags;                      /* NX_ACCEL_* */
 };
 

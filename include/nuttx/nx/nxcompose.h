@@ -78,10 +78,9 @@
                                         * not light: for light windows */
 #define NX_FX_PARK             0x08    /* May give up its pixels while it
                                         * is not seen (hidden, or covered
-                                        * by opaque windows): they are kept
-                                        * compressed if the hardware can,
-                                        * else its client is asked to draw
-                                        * it again when it is seen */
+                                        * by opaque windows): its client is
+                                        * asked to draw it again when it is
+                                        * seen */
 
 /* nx_compositor() capabilities */
 
@@ -89,8 +88,6 @@
 #define NX_CAP_BC1             0x02    /* Blends from BC1 images
                                         * (NX_BLEND_SRC_BC1, image windows:
                                         * NXBE_WINDOW_IMAGE) */
-#define NX_CAP_PARK            0x04    /* Parked windows are kept
-                                        * compressed (NX_FX_PARK) */
 
 /* nx_gpuop_s op */
 
@@ -171,14 +168,11 @@ struct nx_compose_stats_s
   uint32_t imagepx;
   uint16_t nmem;                 /* Windows in memory (no room) */
   uint32_t membytes;
-  uint16_t nparked;              /* Parked, compressed */
+  uint16_t nparked;              /* Parked, to be drawn again */
   uint32_t parkedpx;             /* ... the pixels they had */
-  uint32_t parkedsize;           /* ... what they take now (pixels) */
-  uint16_t nlost;                /* Parked, to be drawn again */
-  uint32_t lostpx;
   uint32_t parks;                /* Windows parked */
-  uint32_t unparks;              /* ... and put back */
-  uint32_t redraws;              /* ... drawn again by their clients */
+  uint32_t unparks;              /* ... and seen again (drawn again by
+                                  * their clients) */
   uint32_t srcread;              /* Memory windows: source pixels read
                                   * back */
   uint32_t srccached;            /* ... and found read already */
