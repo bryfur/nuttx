@@ -188,6 +188,16 @@ struct nx_accel_s
 
   CODE void (*flip)(FAR const struct nxgl_point_s *origin);
 
+  /* An image in perspective, optional (NULL): the w x h rectangle at src
+   * (a surface) drawn as any convex quadrilateral, its corners (top-left,
+   * top-right, bottom-right, bottom-left) at (x[k], y[k]) in 1/16 pixels,
+   * only inside clip.  For NX_FX_QUAD (nxcompose.h)
+   */
+
+  CODE void (*quad)(FAR const struct nxgl_point_s *src, nxgl_coord_t w,
+                    nxgl_coord_t h, FAR const int32_t *x,
+                    FAR const int32_t *y, FAR const struct nxgl_rect_s *clip);
+
   uint32_t flags;                      /* NX_ACCEL_* */
 };
 

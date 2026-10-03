@@ -381,6 +381,33 @@ static inline bool wnd_pixels(FAR struct nxbe_window_s *wnd)
          (wnd->surface || wnd->fbmem != NULL);
 }
 
+/* Shown as a quadrilateral (NX_FX_QUAD), which needs its surface */
+
+static inline bool wnd_quad(FAR struct nxbe_window_s *wnd)
+{
+  return (wnd->fx.flags & NX_FX_QUAD) != 0 && wnd->surface &&
+         !NXBE_ISLAYER(wnd) && !NXBE_ISIMAGE(wnd) &&
+         g_nxaccel->quad != NULL;
+}
+
+/* ... its corners (12.4), with the window at b */
+
+static void wnd_corners_at(FAR struct nxbe_window_s *wnd,
+                           FAR const struct nxgl_rect_s *b,
+                           FAR int32_t *x, FAR int32_t *y)
+{
+  FAR const int16_t *q = wnd->fx.quad;
+
+  x[0] = (b->pt1.x + q[0]) * 16;
+  y[0] = (b->pt1.y + q[1]) * 16;
+  x[1] = (b->pt2.x + 1 + q[2]) * 16;
+  y[1] = (b->pt1.y + q[3]) * 16;
+  x[2] = (b->pt2.x + 1 + q[4]) * 16;
+  y[2] = (b->pt2.y + 1 + q[5]) * 16;
+  x[3] = (b->pt1.x + q[6]) * 16;
+  y[3] = (b->pt2.y + 1 + q[7]) * 16;
+}
+
 /* The shadow's inner rectangle (the window's rounded rectangle, inset by
  * the radius, moved down) and how far it reaches, with the window at b
  */
@@ -418,6 +445,33 @@ static void wnd_extent_at(FAR struct nxbe_window_s *wnd,
   struct nxgl_rect_s inner;
   struct nxgl_rect_s reach;
 
+  if (wnd_quad(wnd))
+    {
+      int32_t x[4];
+      int32_t y[4];
+      int32_t x0;
+      int32_t y0;
+      int32_t x1;
+      int32_t y1;
+      int k;
+
+      /* The pixels the quadrilateral's bounding box touches */
+
+      wnd_corners_at(wnd, b, x, y);
+      x0 = x1 = x[0];
+      y0 = y1 = y[0];
+      for (k = 1; k < 4; k++)
+        {
+          x0 = x[k] < x0 ? x[k] : x0;
+          x1 = x[k] > x1 ? x[k] : x1;
+          y0 = y[k] < y0 ? y[k] : y0;
+          y1 = y[k] > y1 ? y[k] : y1;
+        }
+
+      rect_set(ext, x0 >> 4, y0 >> 4, (x1 + 15) >> 4, (y1 + 15) >> 4);
+      return;
+    }
+
   *ext = *b;
   if (wnd->fx.shadow > 0)
     {
@@ -444,7 +498,7 @@ static bool wnd_covers(FAR struct nxbe_window_s *wnd,
       return true;
     }
 
-  if (!wnd_pixels(wnd) || wnd->fx.opacity != 255 ||
+  if (!wnd_pixels(wnd) || wnd->fx.opacity != 255 || wnd_quad(wnd) ||
       (wnd->fx.flags & NX_FX_KEY) != 0 || !rect_contains(b, r))
     {
       return false;
@@ -1105,6 +1159,28 @@ static void comp_window(FAR struct nxbe_window_s *wnd,
       return;
     }
 
+  if (wnd_quad(wnd))
+    {
+      int32_t x[4];
+      int32_t y[4];
+
+      /* Its surface in perspective, only that */
+
+      wnd_corners_at(wnd, &wnd->bounds, x, y);
+      for (i = 0; i < 4; i++)
+        {
+          x[i] += off->x * 16;
+          y[i] += off->y * 16;
+        }
+
+      nxgl_rectoffset(&dest, r, off->x, off->y);
+      g_nxaccel->quad(&wnd->surfpos,
+                      wnd->bounds.pt2.x - wnd->bounds.pt1.x + 1,
+                      wnd->bounds.pt2.y - wnd->bounds.pt1.y + 1,
+                      x, y, &dest);
+      return;
+    }
+
   if (wnd->fx.shadow > 0)
     {
       comp_shadow(wnd, r, off);
@@ -1459,6 +1535,7 @@ static bool move_copyable(FAR struct nxcomp_move_s *m, int ncopy)
 
   return !NXBE_ISHIDDEN(wnd) && wnd->surface && !NXBE_ISLAYER(wnd) &&
          wnd->fx.opacity == 255 && (wnd->fx.flags & NX_FX_KEY) == 0 &&
+         !wnd_quad(wnd) &&
          wnd->fx.backdrop == 0 &&
          m->from.pt2.x - m->from.pt1.x == wnd->bounds.pt2.x -
                                           wnd->bounds.pt1.x &&
@@ -1998,6 +2075,13 @@ void nxbe_compose_damage_wrect(FAR struct nxbe_window_s *wnd,
 
   if (NXBE_ISHIDDEN(wnd))
     {
+      return;
+    }
+
+  if (wnd_quad(wnd))
+    {
+      wnd_extent(wnd, &r);                /* (it shows anywhere in it) */
+      nxbe_compose_damage(&r);
       return;
     }
 

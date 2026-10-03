@@ -81,6 +81,11 @@
                                         * by opaque windows): its client is
                                         * asked to draw it again when it is
                                         * seen */
+#define NX_FX_QUAD             0x10    /* Shown as the quadrilateral quad[],
+                                        * in perspective (nx_accel_s quad,
+                                        * a window with a surface), without
+                                        * its shadow, corners, edge or
+                                        * opacity: transitions */
 
 /* nx_compositor() capabilities */
 
@@ -119,6 +124,10 @@ struct nx_effects_s
                                   * with NX_FX_DARKEDGE), 0: none */
   nxgl_mxpixel_t tint;           /* ... its colour */
   nxgl_mxpixel_t key;            /* NX_FX_KEY: the clear colour */
+  int16_t  quad[8];              /* NX_FX_QUAD: where its corners are
+                                  * shown, in pixels from where they are
+                                  * (top-left, top-right, bottom-right,
+                                  * bottom-left; x then y) */
 };
 
 /* One operation of the display hardware on a window.  Coordinates are the
