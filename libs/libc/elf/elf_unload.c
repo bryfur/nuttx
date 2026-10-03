@@ -112,9 +112,21 @@ int libelf_unload(FAR struct mod_loadinfo_s *loadinfo)
 #ifdef CONFIG_ARCH_USE_SEPARATED_SECTION
       int i;
 
-      for (i = 0; loadinfo->sectalloc[i] != 0 &&
+      /* Every section that was given memory (sectalloc[0], the null
+       * section's, never is: stopping at the first empty entry freed
+       * nothing).  One mapped in place (XIP) was not allocated.
+       */
+
+      for (i = 0; loadinfo->sectalloc != NULL &&
                   i < loadinfo->ehdr.e_shnum; i++)
         {
+          if (loadinfo->sectalloc[i] == 0 ||
+              (loadinfo->xipbase != 0 &&
+               loadinfo->sectalloc[i] >= loadinfo->xipbase))
+            {
+              continue;
+            }
+
 #  ifdef CONFIG_ARCH_USE_TEXT_HEAP
           if (up_textheap_heapmember((FAR void *)loadinfo->sectalloc[i]))
             {

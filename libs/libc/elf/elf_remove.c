@@ -109,8 +109,21 @@ int libelf_uninit(FAR struct module_s *modp)
       if (!modp->dynamic)
         {
 #ifdef CONFIG_ARCH_USE_SEPARATED_SECTION
-          for (i = 0; i < modp->nsect && modp->sectalloc[i] != NULL; i++)
+          /* Every section that was given memory (sectalloc[0], the null
+           * section's, never is: stopping at the first empty entry freed
+           * nothing, and every run of a module leaked all of it).  One
+           * mapped in place (XIP) was not allocated.
+           */
+
+          for (i = 0; modp->sectalloc != NULL && i < modp->nsect; i++)
             {
+              if (modp->sectalloc[i] == NULL ||
+                  (modp->xipbase != 0 &&
+                   (uintptr_t)modp->sectalloc[i] >= modp->xipbase))
+                {
+                  continue;
+                }
+
 #  ifdef CONFIG_ARCH_USE_TEXT_HEAP
               if (up_textheap_heapmember(modp->sectalloc[i]))
                 {
