@@ -198,6 +198,14 @@ struct nx_accel_s
                     nxgl_coord_t h, FAR const int32_t *x,
                     FAR const int32_t *y, FAR const struct nxgl_rect_s *clip);
 
+  /* Whether the hardware has lost what its memory held (every surface's
+   * pixels, the display buffers) since it last said so, optional (NULL):
+   * true once, then the server has everything drawn again (each window
+   * with a surface asked to redraw, the display composited afresh)
+   */
+
+  CODE bool (*lost)(void);
+
   uint32_t flags;                      /* NX_ACCEL_* */
 };
 

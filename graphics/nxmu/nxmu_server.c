@@ -505,6 +505,18 @@ int nx_runinstance(FAR const char *mqname, FAR NX_DRIVERTYPE *dev)
         }
 #endif
 
+#ifdef CONFIG_NX_ACCEL
+      /* A display whose memory may be lost (nx_accel_s lost: another GPU
+       * ran): looked at once a second, however idle (nxmu_accel_idle())
+       */
+
+      if (g_nxaccel != NULL && g_nxaccel->lost != NULL &&
+          (waitms < 0 || waitms > 1000))
+        {
+          waitms = 1000;
+        }
+#endif
+
       if (waitms >= 0)
         {
           struct timespec abstime;

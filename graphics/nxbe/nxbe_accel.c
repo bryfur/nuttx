@@ -569,6 +569,13 @@ void nxbe_accel_install(FAR struct nxbe_plane_s *plane, int display,
 
 void nxbe_accel_flush(void)
 {
+#ifdef CONFIG_NX_RAMBACKED
+  if (g_nxaccel != NULL && g_nxaccel->lost != NULL && g_nxaccel->lost())
+    {
+      nxbe_surface_lost();
+    }
+#endif
+
   if (g_nxaccel != NULL && g_nxaccel->flush != NULL)
     {
       g_nxaccel->flush();
@@ -1150,6 +1157,48 @@ void nxbe_surface_unpark(FAR struct nxbe_window_s *wnd)
   nxbe_compose_changed();
   nxbe_compose_redrawing(wnd);
   nxmu_redrawreq(wnd, &wnd->bounds);
+}
+
+/****************************************************************************
+ * Name: nxbe_surface_lost
+ *
+ * Description:
+ *   The hardware lost what its memory held (nx_accel_s lost: another GPU
+ *   ran for a while): every window with a surface is asked to draw itself
+ *   again (its client's redraw: hidden windows holding pictures too, whose
+ *   clients take that as their pixels lost), the sources copied from them
+ *   are forgotten, and the display is composited afresh.  Windows in
+ *   memory and parked ones need nothing.
+ *
+ ****************************************************************************/
+
+void nxbe_surface_lost(void)
+{
+  FAR struct nxbe_window_s *wnd;
+  struct nxgl_rect_s rect;
+
+  for (wnd = g_ramwnds; wnd != NULL; wnd = wnd->surfnext)
+    {
+      if (!wnd->surface)
+        {
+          continue;
+        }
+
+      nxbe_srccache_free(wnd);
+      rect.pt1   = wnd->surfpos;
+      rect.pt2.x = wnd->surfpos.x + wnd->surfsize.w - 1;
+      rect.pt2.y = wnd->surfpos.y + wnd->surfsize.h - 1;
+      g_nxaccel->fill(&rect, 0);
+#ifdef CONFIG_NX_COMPOSITOR
+      nxbe_compose_redrawing(wnd);
+#endif
+      nxmu_redrawreq(wnd, &wnd->bounds);
+    }
+
+#ifdef CONFIG_NX_COMPOSITOR
+  nxbe_compose_setmode(true);
+  nxbe_compose_setmode(false);
+#endif
 }
 
 /****************************************************************************

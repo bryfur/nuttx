@@ -366,6 +366,7 @@ bool nxbe_surface_park(FAR struct nxbe_window_s *wnd);
 void nxbe_surface_unpark(FAR struct nxbe_window_s *wnd);
 int  nxbe_surface_frommemory(void);
 #endif
+void nxbe_surface_lost(void);
 #endif
 #endif
 
