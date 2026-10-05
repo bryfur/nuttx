@@ -83,9 +83,13 @@
                                         * seen */
 #define NX_FX_QUAD             0x10    /* Shown as the quadrilateral quad[],
                                         * in perspective (nx_accel_s quad,
-                                        * a window with a surface), without
-                                        * its shadow, corners, edge or
-                                        * opacity: transitions */
+                                        * a window with a surface:
+                                        * NX_CAP_QUAD), its corners round
+                                        * (NX_FX_ROUND, not smoothed), its
+                                        * shadow under the rectangle that
+                                        * is the quadrilateral's average,
+                                        * without its edge or opacity:
+                                        * transitions, effects */
 
 /* nx_compositor() capabilities */
 
@@ -93,6 +97,8 @@
 #define NX_CAP_BC1             0x02    /* Blends from BC1 images
                                         * (NX_BLEND_SRC_BC1, image windows:
                                         * NXBE_WINDOW_IMAGE) */
+#define NX_CAP_QUAD            0x04    /* Shows windows in perspective
+                                        * (NX_FX_QUAD) */
 
 /* nx_gpuop_s op */
 

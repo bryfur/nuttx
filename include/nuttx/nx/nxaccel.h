@@ -191,12 +191,15 @@ struct nx_accel_s
   /* An image in perspective, optional (NULL): the w x h rectangle at src
    * (a surface) drawn as any convex quadrilateral, its corners (top-left,
    * top-right, bottom-right, bottom-left) at (x[k], y[k]) in 1/16 pixels,
-   * only inside clip.  For NX_FX_QUAD (nxcompose.h)
+   * only inside clip; radius > 0: the image's corners cut round by circles
+   * of that radius (image pixels), as a window's.  For NX_FX_QUAD
+   * (nxcompose.h)
    */
 
   CODE void (*quad)(FAR const struct nxgl_point_s *src, nxgl_coord_t w,
                     nxgl_coord_t h, FAR const int32_t *x,
-                    FAR const int32_t *y, FAR const struct nxgl_rect_s *clip);
+                    FAR const int32_t *y, int radius,
+                    FAR const struct nxgl_rect_s *clip);
 
   /* Whether the hardware has lost what its memory held (every surface's
    * pixels, the display buffers) since it last said so, optional (NULL):

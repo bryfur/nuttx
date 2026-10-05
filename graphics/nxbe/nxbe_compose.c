@@ -408,6 +408,57 @@ static void wnd_corners_at(FAR struct nxbe_window_s *wnd,
   y[3] = (b->pt2.y + 1 + q[7]) * 16;
 }
 
+/* ... the pixels their bounding box touches */
+
+static void wnd_quadbox_at(FAR struct nxbe_window_s *wnd,
+                           FAR const struct nxgl_rect_s *b,
+                           FAR struct nxgl_rect_s *box)
+{
+  int32_t x[4];
+  int32_t y[4];
+  int32_t x0;
+  int32_t y0;
+  int32_t x1;
+  int32_t y1;
+  int k;
+
+  wnd_corners_at(wnd, b, x, y);
+  x0 = x1 = x[0];
+  y0 = y1 = y[0];
+  for (k = 1; k < 4; k++)
+    {
+      x0 = x[k] < x0 ? x[k] : x0;
+      x1 = x[k] > x1 ? x[k] : x1;
+      y0 = y[k] < y0 ? y[k] : y0;
+      y1 = y[k] > y1 ? y[k] : y1;
+    }
+
+  rect_set(box, x0 >> 4, y0 >> 4, (x1 + 15) >> 4, (y1 + 15) >> 4);
+}
+
+/* ... the rectangle that is their average (where its shadow falls), and
+ * one inside them (that the quadrilateral covers, near enough: its
+ * shadow need not be drawn there), with the window at b
+ */
+
+static void wnd_quadrects_at(FAR struct nxbe_window_s *wnd,
+                             FAR const struct nxgl_rect_s *b,
+                             FAR struct nxgl_rect_s *avg,
+                             FAR struct nxgl_rect_s *in)
+{
+  int32_t x[4];
+  int32_t y[4];
+
+  wnd_corners_at(wnd, b, x, y);
+  rect_set(avg, (x[0] + x[3]) >> 5, (y[0] + y[1]) >> 5,
+           ((x[1] + x[2]) >> 5) - 1, ((y[2] + y[3]) >> 5) - 1);
+  if (in != NULL)
+    {
+      rect_set(in, (MAX(x[0], x[3]) + 15) >> 4, (MAX(y[0], y[1]) + 15) >> 4,
+               (MIN(x[1], x[2]) >> 4) - 1, (MIN(y[2], y[3]) >> 4) - 1);
+    }
+}
+
 /* The shadow's inner rectangle (the window's rounded rectangle, inset by
  * the radius, moved down) and how far it reaches, with the window at b
  */
@@ -447,28 +498,18 @@ static void wnd_extent_at(FAR struct nxbe_window_s *wnd,
 
   if (wnd_quad(wnd))
     {
-      int32_t x[4];
-      int32_t y[4];
-      int32_t x0;
-      int32_t y0;
-      int32_t x1;
-      int32_t y1;
-      int k;
+      struct nxgl_rect_s avg;
 
-      /* The pixels the quadrilateral's bounding box touches */
+      /* The quadrilateral's bounding box, and its shadow's reach */
 
-      wnd_corners_at(wnd, b, x, y);
-      x0 = x1 = x[0];
-      y0 = y1 = y[0];
-      for (k = 1; k < 4; k++)
+      wnd_quadbox_at(wnd, b, ext);
+      if (wnd->fx.shadow > 0)
         {
-          x0 = x[k] < x0 ? x[k] : x0;
-          x1 = x[k] > x1 ? x[k] : x1;
-          y0 = y[k] < y0 ? y[k] : y0;
-          y1 = y[k] > y1 ? y[k] : y1;
+          wnd_quadrects_at(wnd, b, &avg, NULL);
+          wnd_shadow_at(wnd, &avg, &inner, &reach);
+          nxgl_rectunion(ext, ext, &reach);
         }
 
-      rect_set(ext, x0 >> 4, y0 >> 4, (x1 + 15) >> 4, (y1 + 15) >> 4);
       return;
     }
 
@@ -636,13 +677,16 @@ static void op_inner(FAR struct nx_blend_s *b,
   b->p[3] = inner->pt2.y + off->y;
 }
 
-/* Draw a window's shadow in display rectangle r */
+/* Draw a window's shadow in display rectangle r: the shadow of rectangle
+ * at, except where w (the window) covers it
+ */
 
-static void comp_shadow(FAR struct nxbe_window_s *wnd,
-                        FAR const struct nxgl_rect_s *r,
-                        FAR const struct nxgl_point_s *off)
+static void comp_shadow_at(FAR struct nxbe_window_s *wnd,
+                           FAR const struct nxgl_rect_s *at,
+                           FAR const struct nxgl_rect_s *w,
+                           FAR const struct nxgl_rect_s *r,
+                           FAR const struct nxgl_point_s *off)
 {
-  FAR const struct nxgl_rect_s *w = &wnd->bounds;
   struct nxgl_rect_s inner;
   struct nxgl_rect_s reach;
   struct nxgl_rect_s e;
@@ -651,7 +695,7 @@ static void comp_shadow(FAR struct nxbe_window_s *wnd,
   int n = 0;
   int i;
 
-  wnd_shadow(wnd, &inner, &reach);
+  wnd_shadow_at(wnd, at, &inner, &reach);
   nxgl_rectintersect(&e, &reach, r);
   if (rect_empty(&e))
     {
@@ -673,7 +717,9 @@ static void comp_shadow(FAR struct nxbe_window_s *wnd,
    */
 
   if (wnd_round(wnd) && wnd_pixels(wnd) && wnd->fx.opacity == 255 &&
-      wnd->fx.backdrop == 0 && (wnd->fx.flags & NX_FX_KEY) == 0)
+      wnd->fx.backdrop == 0 && (wnd->fx.flags & NX_FX_KEY) == 0 &&
+      w->pt2.x - w->pt1.x >= 2 * NXCOMP_R &&
+      w->pt2.y - w->pt1.y >= 2 * NXCOMP_R)
     {
       rect_set(&part[n++], w->pt1.x, w->pt1.y,
                w->pt1.x + NXCOMP_R - 1, w->pt1.y + NXCOMP_R - 1);
@@ -706,6 +752,13 @@ static void comp_shadow(FAR struct nxbe_window_s *wnd,
       op_inner(&b, &inner, off);
       g_nxaccel->blend(&b);
     }
+}
+
+static inline void comp_shadow(FAR struct nxbe_window_s *wnd,
+                               FAR const struct nxgl_rect_s *r,
+                               FAR const struct nxgl_point_s *off)
+{
+  comp_shadow_at(wnd, &wnd->bounds, &wnd->bounds, r, off);
 }
 
 /* A small surface to blend the pixels of windows in memory from: their
@@ -1164,7 +1217,22 @@ static void comp_window(FAR struct nxbe_window_s *wnd,
       int32_t x[4];
       int32_t y[4];
 
-      /* Its surface in perspective, only that */
+      /* Its shadow, under the rectangle that is the quadrilateral's
+       * average; its surface in perspective
+       */
+
+      if (wnd->fx.shadow > 0)
+        {
+          struct nxgl_rect_s avg;
+          struct nxgl_rect_s in;
+
+          wnd_quadrects_at(wnd, &wnd->bounds, &avg, &in);
+          if (avg.pt2.x - avg.pt1.x >= 2 * NXCOMP_R &&
+              avg.pt2.y - avg.pt1.y >= 2 * NXCOMP_R)
+            {
+              comp_shadow_at(wnd, &avg, &in, r, off);
+            }
+        }
 
       wnd_corners_at(wnd, &wnd->bounds, x, y);
       for (i = 0; i < 4; i++)
@@ -1177,7 +1245,7 @@ static void comp_window(FAR struct nxbe_window_s *wnd,
       g_nxaccel->quad(&wnd->surfpos,
                       wnd->bounds.pt2.x - wnd->bounds.pt1.x + 1,
                       wnd->bounds.pt2.y - wnd->bounds.pt1.y + 1,
-                      x, y, &dest);
+                      x, y, wnd_round(wnd) ? NXCOMP_R : 0, &dest);
       return;
     }
 
@@ -1731,7 +1799,21 @@ static bool comp_seen(FAR struct nxbe_window_s *wnd)
       return false;
     }
 
-  nxgl_rectintersect(&r, &wnd->bounds, &g_comp.be->bkgd.bounds);
+  /* (Shown in perspective, or to be once it has its surface again:
+   * where the quadrilateral is; a window shown so covers only the
+   * rectangle inside it)
+   */
+
+  if ((wnd->fx.flags & NX_FX_QUAD) != 0 && g_nxaccel->quad != NULL)
+    {
+      wnd_quadbox_at(wnd, &wnd->bounds, &r);
+      nxgl_rectintersect(&r, &r, &g_comp.be->bkgd.bounds);
+    }
+  else
+    {
+      nxgl_rectintersect(&r, &wnd->bounds, &g_comp.be->bkgd.bounds);
+    }
+
   if (rect_empty(&r))
     {
       return false;
@@ -1739,7 +1821,22 @@ static bool comp_seen(FAR struct nxbe_window_s *wnd)
 
   for (a = wnd->above; a != NULL; a = a->above)
     {
+      struct nxgl_rect_s avg;
+      struct nxgl_rect_s in;
+
       b = &a->bounds;
+      if (wnd_quad(a))
+        {
+          wnd_quadrects_at(a, &a->bounds, &avg, &in);
+          if (in.pt2.x - in.pt1.x < 2 * NXCOMP_R ||
+              in.pt2.y - in.pt1.y < 2 * NXCOMP_R)
+            {
+              continue;
+            }
+
+          b = &in;
+        }
+
       if (!wnd_pixels(a) || a->fx.opacity != 255 ||
           (a->fx.flags & NX_FX_KEY) != 0 ||
           !nxgl_rectoverlap(&r, (FAR struct nxgl_rect_s *)b))
@@ -2080,7 +2177,7 @@ void nxbe_compose_damage_wrect(FAR struct nxbe_window_s *wnd,
 
   if (wnd_quad(wnd))
     {
-      wnd_extent(wnd, &r);                /* (it shows anywhere in it) */
+      wnd_quadbox_at(wnd, &wnd->bounds, &r);  /* (it shows anywhere in it) */
       nxbe_compose_damage(&r);
       return;
     }
