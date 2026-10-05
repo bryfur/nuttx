@@ -194,6 +194,17 @@ struct nx_compose_stats_s
   uint32_t tosurface;            /* Memory windows moved into surfaces */
   uint16_t npieces;              /* Windows' surfaces: pieces in all */
   uint16_t nsplit;               /* ... windows in more than one */
+  uint32_t ncells;               /* ... cells in all */
+  uint32_t nres;                 /* ... of them resident (the others in
+                                  * the swap, or lost) */
+  uint32_t swapcells;            /* Cells in the swap */
+  uint32_t swapbytes;            /* ... the memory it takes */
+  uint32_t swapouts;             /* Cells read back into it */
+  uint32_t swapins;              /* ... put back from it */
+  uint32_t swaplost;             /* Cells lost (no room in the swap) */
+  uint32_t redrawn;              /* ... drawn again by their clients */
+  uint64_t swapoutus;            /* Time reading back */
+  uint64_t swapinus;             /* ... putting back */
 };
 
 /****************************************************************************

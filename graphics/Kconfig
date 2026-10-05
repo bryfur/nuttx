@@ -183,6 +183,26 @@ config NX_COMPOSITOR_MAXDAMAGE
 	int "Damaged rectangles held"
 	default 16
 
+config NX_COMPOSITOR_SWAP
+	int "Swap: memory for windows' covered parts (KB)"
+	default 3072
+	---help---
+		With the hardware's cells (nx_accel_s cells_alloc), the parts of
+		windows that are not seen (covered) may give up their cells when
+		others need them: what they hold is read back (nx_accel_s
+		readbulk, else get) into this much memory at most, and put back
+		when they are seen again; beyond it, a window whose client draws
+		it again on request (NX_FX_PARK) is asked to.  0: never read
+		back.
+
+config NX_COMPOSITOR_SWAPKEEP
+	int "Swap: memory kept free for others (KB)"
+	default 2048
+	---help---
+		The swap takes no more memory once the largest free block of the
+		heap is smaller than this (for programs and games that need
+		large ones).
+
 endif
 
 config NX_UPDATE

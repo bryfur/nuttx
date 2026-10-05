@@ -81,6 +81,7 @@
 #include <nuttx/nx/nxcompose.h>
 
 #include "nxbe.h"
+#include "nxmu.h"
 
 #ifdef CONFIG_NX_COMPOSITOR
 
@@ -110,6 +111,11 @@
                                             * the frame waits for it */
 #define NXCOMP_PACKAGAIN  MSEC2TICK(5000)  /* Surfaces packed for a second
                                             * buffer at most this often */
+#define NXCOMP_BUFAGAIN   MSEC2TICK(2000)  /* ... taken back so long after
+                                            * it was given up */
+#define NXCOMP_SWAPFREE   64               /* Swap: cells kept free */
+#define NXCOMP_SWAPSTEP   64               /* ... read back when idle, at
+                                            * most, a time */
 
 /****************************************************************************
  * Private Types
@@ -155,6 +161,9 @@ struct nxcomp_s
   bool changed;                           /* The statistics are old */
   bool packed;                            /* Packed for a second buffer */
   bool packlater;                         /* ... to be tried again */
+  bool needs;                             /* Windows' needs are old */
+  clock_t lastdrop;                       /* The back buffer given up */
+  FAR struct nxbe_window_s *target;       /* nx_gpuops() into it */
   clock_t lastpack;                       /* ... then */
   uint16_t nparked;                       /* Windows parked */
   int ndamage;
@@ -1266,6 +1275,16 @@ static void comp_gpuop(FAR struct nxbe_window_s *wnd,
             }
         }
 
+      /* Some of the source not resident (not seen): into a window, what
+       * it made there is not what it should be
+       */
+
+      if (g_comp.target != NULL && !nxbe_surface_resident(src, &srel))
+        {
+          nxgl_rectoffset(&d, &dest, -org->x, -org->y);
+          nxbe_surface_lose(g_comp.target, &d);
+        }
+
       return;
     }
 
@@ -1819,8 +1838,10 @@ static void comp_dropback(void)
 
   g_nxaccel->surface_free(&g_comp.buf[1], g_comp.bufsize.w,
                           g_comp.bufsize.h);
-  g_comp.dbuf  = false;
-  g_comp.nprev = 0;
+  g_comp.dbuf     = false;
+  g_comp.nprev    = 0;
+  g_comp.lastdrop = clock_systime_ticks();
+  g_comp.needs    = true;
   ginfo("Single buffered\n");
 }
 
@@ -2152,6 +2173,11 @@ static void comp_snapshot(void)
           st.surfpx += px;
           st.npieces += np;
           st.nsplit  += np > 1;
+          if (wnd->cells != NULL && wnd->cells->cw > 0)
+            {
+              st.ncells += wnd->cells->cw * wnd->cells->ch;
+              st.nres   += wnd->cells->nres;
+            }
           if (wnd->surfkind == NX_SURFACE_IMAGE)
             {
               st.nimage++;
@@ -2178,10 +2204,435 @@ static void comp_snapshot(void)
   g_comp.changed = false;
 }
 
-/* Before a frame: windows parked that are seen again get a surface back
- * and are drawn again; windows in memory go into surfaces if there is
- * room now.  False if the frame should wait for windows being drawn
- * again.
+/* Residency ****************************************************************/
+
+/* The opaque windows above wnd that meet r, as rectangles they surely
+ * cover (as comp_seen() has them); false if there are too many to tell
+ */
+
+static bool comp_covers(FAR struct nxbe_window_s *wnd,
+                        FAR const struct nxgl_rect_s *r,
+                        FAR struct nxgl_rect_s *cover, FAR int *ncover)
+{
+  FAR struct nxbe_window_s *a;
+  FAR const struct nxgl_rect_s *b;
+  struct nxgl_rect_s avg;
+  struct nxgl_rect_s in;
+  int n = 0;
+
+  for (a = wnd->above; a != NULL; a = a->above)
+    {
+      b = &a->bounds;
+      if (wnd_quad(a))
+        {
+          wnd_quadrects_at(a, &a->bounds, &avg, &in);
+          if (in.pt2.x - in.pt1.x < 2 * NXCOMP_R ||
+              in.pt2.y - in.pt1.y < 2 * NXCOMP_R)
+            {
+              continue;
+            }
+
+          b = &in;
+        }
+
+      if (NXBE_ISHIDDEN(a) || !wnd_pixels(a) || a->fx.opacity != 255 ||
+          (a->fx.flags & NX_FX_KEY) != 0 ||
+          !nxgl_rectoverlap((FAR struct nxgl_rect_s *)r,
+                            (FAR struct nxgl_rect_s *)b))
+        {
+          continue;
+        }
+
+      if (n + 2 > NXCOMP_MAXCOVER)
+        {
+          return false;
+        }
+
+      if (wnd_round(a))
+        {
+          rect_set(&cover[n++], b->pt1.x + NXCOMP_R, b->pt1.y,
+                   b->pt2.x - NXCOMP_R, b->pt2.y);
+          rect_set(&cover[n++], b->pt1.x, b->pt1.y + NXCOMP_R,
+                   b->pt2.x, b->pt2.y - NXCOMP_R);
+        }
+      else
+        {
+          cover[n++] = *b;
+        }
+    }
+
+  *ncover = n;
+  return true;
+}
+
+/* Which cells a window needs: those seen (not covered by opaque windows
+ * above, on the display), all of a hidden window's that may not be parked
+ * (images and glyphs that others draw from), none of a hidden one's that
+ * may; in perspective, those whose quadrilaterals are seen
+ */
+
+static void comp_need(FAR struct nxbe_window_s *wnd)
+{
+  static struct nxgl_rect_s cover[NXCOMP_MAXCOVER];   /* (the server's) */
+  static struct nxgl_rect_s piece[NXCOMP_MAXPIECES];
+  FAR struct nxbe_cells_s *c = wnd->cells;
+  struct nxgl_rect_s r;
+  int sh = g_nxaccel->cellshift;
+  int ncover;
+  int npiece;
+  int n = c->cw * c->ch;
+  int i;
+  int j;
+  int k;
+
+  for (k = 0; k < n; k++)
+    {
+      c->flags[k] &= ~NXBE_CELL_NEED;
+    }
+
+  if (NXBE_ISHIDDEN(wnd))
+    {
+      if ((wnd->fx.flags & NX_FX_PARK) == 0)
+        {
+          for (k = 0; k < n; k++)
+            {
+              c->flags[k] |= NXBE_CELL_NEED;
+            }
+        }
+
+      return;
+    }
+
+  if ((wnd->fx.flags & NX_FX_QUAD) != 0 && g_nxaccel->quad != NULL)
+    {
+      int32_t x[4];
+      int32_t y[4];
+      int32_t bx16;
+      int32_t by16;
+      float x0;
+      float y0;
+      float x1;
+      float y1;
+      float x2;
+      float y2;
+      float x3;
+      float y3;
+      float dx1;
+      float dx2;
+      float dx3;
+      float dy1;
+      float dy2;
+      float dy3;
+      float den;
+      float a;
+      float b;
+      float cc;
+      float d;
+      float e;
+      float f;
+      float g;
+      float hh;
+      nxgl_coord_t w = wnd->bounds.pt2.x - wnd->bounds.pt1.x + 1;
+      nxgl_coord_t h = wnd->bounds.pt2.y - wnd->bounds.pt1.y + 1;
+
+      /* Each cell's quadrilateral's box, seen unless an opaque window
+       * above surely covers it (or off the display)
+       */
+
+      wnd_quadbox_at(wnd, &wnd->bounds, &r);
+      if (!comp_covers(wnd, &r, cover, &ncover))
+        {
+          ncover = 0;
+        }
+
+      wnd_corners_at(wnd, &wnd->bounds, x, y);
+      bx16 = MIN(MIN(x[0], x[1]), MIN(x[2], x[3])) & ~15;
+      by16 = MIN(MIN(y[0], y[1]), MIN(y[2], y[3])) & ~15;
+      x0 = (x[0] - bx16) / 16.0f;
+      y0 = (y[0] - by16) / 16.0f;
+      x1 = (x[1] - bx16) / 16.0f;
+      y1 = (y[1] - by16) / 16.0f;
+      x2 = (x[2] - bx16) / 16.0f;
+      y2 = (y[2] - by16) / 16.0f;
+      x3 = (x[3] - bx16) / 16.0f;
+      y3 = (y[3] - by16) / 16.0f;
+      dx1 = x1 - x2;
+      dx2 = x3 - x2;
+      dx3 = x0 - x1 + x2 - x3;
+      dy1 = y1 - y2;
+      dy2 = y3 - y2;
+      dy3 = y0 - y1 + y2 - y3;
+      den = dx1 * dy2 - dx2 * dy1;
+      if (den > -1e-6f && den < 1e-6f)
+        {
+          return;
+        }
+
+      g  = (dx3 * dy2 - dx2 * dy3) / den;
+      hh = (dx1 * dy3 - dx3 * dy1) / den;
+      a  = x1 - x0 + g * x1;
+      b  = x3 - x0 + hh * x3;
+      cc = x0;
+      d  = y1 - y0 + g * y1;
+      e  = y3 - y0 + hh * y3;
+      f  = y0;
+
+      for (k = 0; k < n; k++)
+        {
+          float xmin = 1e9f;
+          float ymin = 1e9f;
+          float xmax = -1e9f;
+          float ymax = -1e9f;
+          int q;
+
+          for (q = 0; q < 4; q++)
+            {
+              float u = (float)((k % c->cw + (q == 1 || q == 2)) << sh) / w;
+              float v = (float)((k / c->cw + (q >= 2)) << sh) / h;
+              float wn = g * u + hh * v + 1.0f;
+              float px;
+              float py;
+
+              u  = u > 1.0f ? 1.0f : u;
+              v  = v > 1.0f ? 1.0f : v;
+              wn = g * u + hh * v + 1.0f;
+              if (wn < 1e-6f)
+                {
+                  xmin = -1e9f;               /* (past the horizon: all) */
+                  ymin = -1e9f;
+                  xmax = 1e9f;
+                  ymax = 1e9f;
+                  break;
+                }
+
+              px = (a * u + b * v + cc) / wn + bx16 / 16.0f;
+              py = (d * u + e * v + f) / wn + by16 / 16.0f;
+              xmin = px < xmin ? px : xmin;
+              xmax = px > xmax ? px : xmax;
+              ymin = py < ymin ? py : ymin;
+              ymax = py > ymax ? py : ymax;
+            }
+
+          rect_set(&r, xmin < -30000.0f ? -30000 : (nxgl_coord_t)xmin - 1,
+                   ymin < -30000.0f ? -30000 : (nxgl_coord_t)ymin - 1,
+                   xmax > 30000.0f ? 30000 : (nxgl_coord_t)xmax + 1,
+                   ymax > 30000.0f ? 30000 : (nxgl_coord_t)ymax + 1);
+          nxgl_rectintersect(&r, &r, &g_comp.be->bkgd.bounds);
+          if (rect_empty(&r))
+            {
+              continue;
+            }
+
+          for (i = 0; i < ncover && !rect_contains(&cover[i], &r); i++)
+            {
+            }
+
+          if (i == ncover)
+            {
+              c->flags[k] |= NXBE_CELL_NEED;
+            }
+        }
+
+      return;
+    }
+
+  /* What of it is on the display, but for what opaque windows cover */
+
+  nxgl_rectintersect(&r, &wnd->bounds, &g_comp.be->bkgd.bounds);
+  if (rect_empty(&r))
+    {
+      return;
+    }
+
+  if (!comp_covers(wnd, &r, cover, &ncover) ||
+      (npiece = rect_cut(&r, cover, ncover, piece)) < 0)
+    {
+      npiece = 1;
+      piece[0] = r;
+    }
+
+  for (k = 0; k < npiece; k++)
+    {
+      int i0 = (piece[k].pt1.x - wnd->bounds.pt1.x) >> sh;
+      int j0 = (piece[k].pt1.y - wnd->bounds.pt1.y) >> sh;
+      int i1 = (piece[k].pt2.x - wnd->bounds.pt1.x) >> sh;
+      int j1 = (piece[k].pt2.y - wnd->bounds.pt1.y) >> sh;
+
+      i1 = MIN(i1, c->cw - 1);
+      j1 = MIN(j1, c->ch - 1);
+      for (j = MAX(j0, 0); j <= j1; j++)
+        {
+          for (i = MAX(i0, 0); i <= i1; i++)
+            {
+              c->flags[j * c->cw + i] |= NXBE_CELL_NEED;
+            }
+        }
+    }
+}
+
+/****************************************************************************
+ * Name: nxbe_compose_needs
+ *
+ * Description:
+ *   Which cells the windows need (NXBE_CELL_NEED), worked out again if
+ *   windows have moved, been restacked, shown, hidden, parked..., or if all
+ *   is set.
+ *
+ ****************************************************************************/
+
+void nxbe_compose_needs(bool all)
+{
+  FAR struct nxbe_window_s *wnd;
+
+  if (!g_comp.on || g_nxaccel->cells_alloc == NULL ||
+      (!g_comp.needs && !all))
+    {
+      return;
+    }
+
+  g_comp.needs = false;
+  for (wnd = nxbe_surface_list(); wnd != NULL; wnd = wnd->surfnext)
+    {
+      if (wnd->surface && wnd->cells != NULL && wnd->cells->cw > 0)
+        {
+          comp_need(wnd);
+        }
+    }
+}
+
+/* Before a frame: every window has the cells it needs (put back from the
+ * swap, or drawn again by its client); one that cannot have them goes to
+ * memory (in perspective: what it lacks is not drawn)
+ */
+
+static void comp_resident(void)
+{
+  FAR struct nxbe_window_s *wnd;
+  FAR struct nxbe_window_s *next;
+
+  if (g_nxaccel->cells_alloc == NULL)
+    {
+      return;
+    }
+
+  nxbe_compose_needs(false);
+  for (wnd = nxbe_surface_list(); wnd != NULL; wnd = next)
+    {
+      FAR struct nxbe_cells_s *c = wnd->cells;
+
+      next = wnd->surfnext;
+      if (!wnd->surface || c == NULL || c->cw == 0)
+        {
+          continue;
+        }
+
+      if (c->nres == c->cw * c->ch || nxbe_surface_ensure(wnd))
+        {
+          /* In perspective: in one piece if it can be (it then looks the
+           * same whatever its cells are)
+           */
+
+          if ((wnd->fx.flags & NX_FX_QUAD) != 0 && g_nxaccel->quad != NULL)
+            {
+              nxbe_surface_defrag(wnd);
+            }
+
+          continue;
+        }
+
+      if ((wnd->fx.flags & NX_FX_QUAD) != 0 && g_nxaccel->quad != NULL)
+        {
+          continue;
+        }
+
+      gwarn("WARNING: no room for what a window shows: in memory\n");
+      nxbe_srccache_free(wnd);
+      nxbe_surface_close(wnd);
+      nxbe_surface_open(wnd);
+      if (!wnd->surface)
+        {
+          nxbe_surface_tomemory(wnd);
+        }
+      else
+        {
+          nxbe_compose_redrawing(wnd);
+          nxmu_redrawreq(wnd, &wnd->bounds);
+        }
+
+      nxbe_compose_damage_window(wnd);
+    }
+}
+
+/* The server is idle and windows are still: cells that windows do not
+ * need read back into the swap, so that some are free (NXCOMP_SWAPFREE)
+ * for what will be seen next, and enough for a second display buffer if
+ * the windows' needs leave room for one; then the buffer taken back
+ */
+
+static void comp_swapidle(FAR int32_t *next)
+{
+  FAR struct nxbe_window_s *wnd;
+  int sh = g_nxaccel->cellshift;
+  int bufcells = 0;
+  int spare = 0;
+  int nfree;
+  int want;
+  int k;
+
+  nxbe_compose_needs(false);
+  nfree = g_nxaccel->cells_free_count();
+  for (wnd = nxbe_surface_list(); wnd != NULL; wnd = wnd->surfnext)
+    {
+      FAR struct nxbe_cells_s *c = wnd->cells;
+
+      if (!wnd->surface || c == NULL || c->cw == 0)
+        {
+          continue;
+        }
+
+      for (k = 0; k < c->cw * c->ch; k++)
+        {
+          spare += c->map[k] != NX_CELL_NONE &&
+                   (c->flags[k] & NXBE_CELL_NEED) == 0;
+        }
+    }
+
+  if (!g_comp.dbuf && g_nxaccel->flip != NULL &&
+      clock_systime_ticks() - g_comp.lastdrop >= NXCOMP_BUFAGAIN)
+    {
+      bufcells = (((g_comp.be->vinfo.xres + (1 << sh) - 1) >> sh) *
+                  ((g_comp.be->vinfo.yres + (1 << sh) - 1) >> sh));
+      if (nfree + spare < bufcells + NXCOMP_SWAPFREE)
+        {
+          bufcells = 0;                   /* (No room for it) */
+        }
+    }
+
+  want = bufcells + NXCOMP_SWAPFREE - nfree;
+  if (want > 0 && spare > 0)
+    {
+      nxbe_surface_evict(MIN(want, NXCOMP_SWAPSTEP), true);
+      if (want > NXCOMP_SWAPSTEP)
+        {
+          *next = *next < 0 ? NXCOMP_IDLEPOLL : MIN(*next, NXCOMP_IDLEPOLL);
+          return;
+        }
+    }
+
+  if (bufcells > 0 &&
+      g_nxaccel->cells_free_count() >= bufcells + NXCOMP_SWAPFREE / 2)
+    {
+      comp_getback(true);
+      if (g_comp.dbuf)
+        {
+          nxbe_compose_damage(&g_comp.be->bkgd.bounds);
+        }
+    }
+}
+
+/* Before a frame: unpark windows that are visible again and move windows
+ * in memory into surfaces if there is room.  False if the frame should wait
+ * for windows being redrawn.
  */
 
 static bool comp_unpark(void)
@@ -2205,6 +2656,7 @@ static bool comp_unpark(void)
         }
     }
 
+  comp_resident();
   if (g_comp.retry && nxbe_surface_frommemory() > 0)
     {
       nxbe_srccache_trim();
@@ -2259,7 +2711,13 @@ void nxbe_compose_install(FAR struct nxbe_state_s *be)
       g_nxaccel->flip(&g_comp.buf[0]);
     }
 
-  g_comp.on = true;
+  g_comp.on    = true;
+  g_comp.needs = true;
+  if (g_nxaccel->cells_alloc != NULL)
+    {
+      nxbe_swap_init(g_nxaccel->cellshift);
+    }
+
   comp_getback(false);
 }
 
@@ -2334,6 +2792,7 @@ void nxbe_compose_setmode(bool begin)
     }
 
   comp_getback(true);
+  g_comp.needs = true;
   g_comp.nprev = 0;                      /* All of it is drawn anyway */
   nxbe_compose_damage(&g_comp.be->bkgd.bounds);
 }
@@ -2524,6 +2983,7 @@ void nxbe_compose_damage_window(FAR struct nxbe_window_s *wnd)
       return;
     }
 
+  g_comp.needs = true;
   move_drop(wnd);
   if (!NXBE_ISHIDDEN(wnd))
     {
@@ -2555,6 +3015,7 @@ void nxbe_compose_setposition(FAR struct nxbe_window_s *wnd,
     }
 
   g_comp.lastmove = clock_systime_ticks();
+  g_comp.needs    = true;
   if (!NXBE_ISHIDDEN(wnd) && wnd->surface && !NXBE_ISLAYER(wnd) &&
       (move_find(wnd) != NULL || g_comp.nmoves < NXCOMP_MAXMOVES))
     {
@@ -2624,6 +3085,7 @@ bool nxbe_compose_restack(FAR struct nxbe_window_s *wnd, bool top)
     }
 
   wnd_insert_above(wnd, below);
+  g_comp.needs = true;
   return below != oldbelow;
 }
 
@@ -2797,6 +3259,7 @@ void nxbe_compose_gpuops(FAR struct nxbe_window_s *wnd,
 
   rect_set(&dirty, INT16_MAX, INT16_MAX, INT16_MIN, INT16_MIN);
   np = nxbe_surface_pieces(wnd, &p);
+  g_comp.target = wnd;
   for (i = 0; i < nops; i++)
     {
       FAR const struct nx_gpuop_s *op = &ops[i];
@@ -2829,6 +3292,7 @@ void nxbe_compose_gpuops(FAR struct nxbe_window_s *wnd,
         }
     }
 
+  g_comp.target = NULL;
   if (!rect_empty(&dirty))
     {
       if (wnd->srccache != NULL)
@@ -2836,6 +3300,7 @@ void nxbe_compose_gpuops(FAR struct nxbe_window_s *wnd,
           nxbe_srccache_drop(wnd, &dirty);
         }
 
+      nxbe_surface_drawn(wnd, &dirty);
       nxbe_compose_damage_wrect(wnd, &dirty);
     }
 }
@@ -2891,8 +3356,8 @@ int nxbe_compose_wait(void)
 
 void nxbe_compose_run(void)
 {
-  struct nxcomp_copy_s copy[NXCOMP_MAXMOVES];
-  struct nxgl_rect_s redraw[NXCOMP_MAXPREV];
+  static struct nxcomp_copy_s copy[NXCOMP_MAXMOVES];   /* (the server's) */
+  static struct nxgl_rect_s redraw[NXCOMP_MAXPREV];
   struct nxgl_point_s off;
   int nredraw = 0;
   int ncopy;
@@ -2982,6 +3447,7 @@ bool nxbe_compose_seen(FAR struct nxbe_window_s *wnd)
 void nxbe_compose_changed(void)
 {
   g_comp.changed = true;
+  g_comp.needs   = true;
 }
 
 void nxbe_compose_redrawing(FAR struct nxbe_window_s *wnd)
@@ -3091,6 +3557,13 @@ int nxbe_compose_idle(void)
       next = next < 0 ? wait : MIN(next, wait);
     }
 
+  /* Cells not needed read back while all is still */
+
+  if (quiet && g_nxaccel->cells_alloc != NULL)
+    {
+      comp_swapidle(&next);
+    }
+
   if (g_comp.changed)
     {
       comp_snapshot();
@@ -3154,6 +3627,13 @@ void nxbe_compose_stats(FAR struct nx_compose_stats_s *st)
   st->srcread   = g_nxbe_counts.srcread;
   st->srccached = g_nxbe_counts.srccached;
   st->tosurface = g_nxbe_counts.tosurface;
+  st->swapouts  = g_nxbe_swap.outs;
+  st->swapins   = g_nxbe_swap.ins;
+  st->swaplost  = g_nxbe_swap.lost;
+  st->redrawn   = g_nxbe_swap.redrawn;
+  st->swapoutus = g_nxbe_swap.outus;
+  st->swapinus  = g_nxbe_swap.inus;
+  nxbe_swap_usage(&st->swapcells, &st->swapbytes);
 }
 
 #endif /* CONFIG_NX_COMPOSITOR */

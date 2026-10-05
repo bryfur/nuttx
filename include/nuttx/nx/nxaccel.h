@@ -170,7 +170,9 @@ struct nx_accel_s
    * every entry of map (cw x ch, a row of the window's cells after
    * another) that is NX_CELL_NONE, the window's neighbours together in
    * memory where there is room for them so, and returns 0; or none and
-   * -ENOMEM if there are not enough.  cells_free() gives n back.
+   * -ENOMEM if there are not enough.  cells_free() gives n back;
+   * cells_claim() takes those n back if they are all free (0, else
+   * -EBUSY and none); cells_free_count(): how many are free.
    *
    * surface_alloc() with NX_SURFACE_DISPLACE in kind may put the surface
    * over cells that windows have: those are then the surface's, no longer
@@ -180,6 +182,7 @@ struct nx_accel_s
    */
 
   CODE int  (*cells_alloc)(int cw, int ch, FAR uint16_t *map);
+  CODE int  (*cells_claim)(int n, FAR const uint16_t *cells);
   CODE int  (*cells_free_count)(void);
   CODE void (*cells_free)(int n, FAR const uint16_t *cells);
   uint8_t cellshift;

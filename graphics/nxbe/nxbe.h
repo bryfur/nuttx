@@ -375,10 +375,32 @@ struct nxbe_cells_s
   bool dirty;                         /* pieces[] to be made again */
   uint16_t npieces;
   uint16_t maxpieces;
+  uint16_t nres;                      /* Cells it has (resident) */
+  uint16_t nswap;                     /* Cells with a copy in the swap */
+  uint16_t nlost;                     /* Cells lost (CELL_LOST) */
   FAR struct nxbe_piece_s *pieces;
+  FAR int16_t *swap;                  /* cw x ch: the swap's slot, or -1 */
+  FAR uint8_t *flags;                 /* cw x ch: NXBE_CELL_* */
   uint16_t map[1];                    /* cw x ch: the cells, a row after
                                        * another (NX_CELL_NONE: none) */
 };
+
+/* Not all of a window's cells need be resident (CONFIG_NX_COMPOSITOR): a
+ * cell of a window that is not seen there (covered) may give up its cell
+ * when others need room, what it holds read back into the swap
+ * (nxbe_swap.c), or, with no room there, dropped (lost: its client is
+ * asked to draw it again when it is seen); seen again, it gets a cell
+ * back, its pixels put back from the swap.  Drawing goes to the cells
+ * that are resident; a cell drawn into that is not is lost.  The pieces
+ * are the resident cells'.
+ */
+
+#define NXBE_CELL_SWAP  0x01          /* The swap's slot holds its pixels */
+#define NXBE_CELL_LOST  0x02          /* Not resident, its pixels gone */
+#define NXBE_CELL_NEED  0x04          /* Seen: must be resident */
+
+#define NX_CELL_SKIP    0xfffe        /* (cells_alloc(): not to be placed,
+                                       * an entry it takes as placed) */
 
 int  nxbe_surface_pieces(FAR struct nxbe_window_s *wnd,
                          FAR const struct nxbe_piece_s **pieces);
@@ -418,6 +440,17 @@ void nxbe_surface_copyto(FAR struct nxbe_window_s *wnd,
                          FAR const struct nxgl_point_s *dest);
 bool nxbe_surface_take(nxgl_coord_t w, nxgl_coord_t h, int kind,
                        FAR struct nxgl_point_s *pos);
+void nxbe_surface_drawn(FAR struct nxbe_window_s *wnd,
+                        FAR const struct nxgl_rect_s *rel);
+void nxbe_surface_lose(FAR struct nxbe_window_s *wnd,
+                       FAR const struct nxgl_rect_s *rel);
+bool nxbe_surface_resident(FAR struct nxbe_window_s *wnd,
+                           FAR const struct nxgl_rect_s *rel);
+bool nxbe_surface_defrag(FAR struct nxbe_window_s *wnd);
+#ifdef CONFIG_NX_COMPOSITOR
+bool nxbe_surface_ensure(FAR struct nxbe_window_s *wnd);
+int  nxbe_surface_evict(int want, bool io);
+#endif
 
 bool nxbe_surface_open(FAR struct nxbe_window_s *wnd);
 bool nxbe_surface_resize(FAR struct nxbe_window_s *wnd, FAR bool *lost);
@@ -504,6 +537,34 @@ void nxbe_srccache_drop(FAR struct nxbe_window_s *wnd,
                         FAR const struct nxgl_rect_s *rel);
 void nxbe_srccache_free(FAR struct nxbe_window_s *wnd);
 void nxbe_srccache_trim(void);
+
+/* The swap (nxbe_swap.c): slots of a cell each */
+
+struct nxbe_swapstats_s
+{
+  uint32_t outs;                      /* Cells read back into it */
+  uint32_t ins;                       /* ... put back from it */
+  uint32_t lost;                      /* Cells lost (none to read into) */
+  uint32_t redrawn;                   /* ... drawn again by their clients */
+  uint32_t freed;                     /* Cells given up, a copy there */
+  uint32_t refused;                   /* The heap said no */
+  uint64_t outus;                     /* Time reading back */
+  uint64_t inus;                      /* ... putting back */
+};
+
+EXTERN struct nxbe_swapstats_s g_nxbe_swap;
+
+void nxbe_swap_init(int cellshift);
+int  nxbe_swap_alloc(void);
+void nxbe_swap_free(int slot);
+FAR uint32_t *nxbe_swap_slot(int slot);
+void nxbe_swap_usage(FAR uint32_t *slots, FAR uint32_t *bytes);
+
+/* Which cells windows need (NXBE_CELL_NEED), made again if anything that
+ * decides it has changed (or all says so)
+ */
+
+void nxbe_compose_needs(bool all);
 
 /* Counters for nxbe_compose_stats() */
 
