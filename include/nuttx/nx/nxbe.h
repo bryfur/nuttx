@@ -157,6 +157,7 @@
 struct nxbe_state_s;
 struct nxmu_conn_s;
 struct nxbe_srccache_s;
+struct nxbe_cells_s;
 
 struct nxbe_window_s
 {
@@ -198,8 +199,10 @@ struct nxbe_window_s
 
   bool surface;                       /* The pixels are in the surface */
   uint8_t surfkind;                   /* NX_SURFACE_* (nxaccel.h) */
-  struct nxgl_point_s surfpos;        /* Where the surface is */
+  struct nxgl_point_s surfpos;        /* Where the surface is (its first
+                                       * piece's, if it is in pieces) */
   struct nxgl_size_s surfsize;        /* Its size (the window's, when made) */
+  FAR struct nxbe_cells_s *cells;     /* Its pieces (nxbe.h) */
   FAR struct nxbe_window_s *surfnext; /* The server's list of RAM-backed
                                        * windows */
 

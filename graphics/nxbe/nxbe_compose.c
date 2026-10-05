@@ -665,13 +665,12 @@ static void op_window(FAR struct nxbe_window_s *wnd,
                       FAR const struct nxgl_rect_s *r,
                       FAR const struct nxgl_rect_s *dest)
 {
-  struct nxgl_point_s src;
+  struct nxgl_rect_s rel;
 
   if (wnd->surface)
     {
-      src.x = wnd->surfpos.x + r->pt1.x - wnd->bounds.pt1.x;
-      src.y = wnd->surfpos.y + r->pt1.y - wnd->bounds.pt1.y;
-      op_copy(&src, dest);
+      nxgl_rectoffset(&rel, r, -wnd->bounds.pt1.x, -wnd->bounds.pt1.y);
+      nxbe_surface_copyto(wnd, &rel, &dest->pt1);
     }
   else if (wnd->fbmem != NULL)
     {
@@ -809,9 +808,8 @@ static bool comp_stage(void)
           w = MAX(w, size.w);
         }
 
-      g_comp.stage = g_nxaccel->surface_alloc(w, NXCOMP_STAGEH,
-                                              NX_SURFACE_STAGE,
-                                              &g_comp.stagepos) >= 0;
+      g_comp.stage = nxbe_surface_take(w, NXCOMP_STAGEH, NX_SURFACE_STAGE,
+                                       &g_comp.stagepos);
       g_comp.stagesize.w = w;
       g_comp.stagesize.h = NXCOMP_STAGEH;
     }
@@ -903,13 +901,19 @@ static void comp_pixels(FAR struct nxbe_window_s *wnd,
   FAR const struct nxgl_rect_s *w = &wnd->bounds;
   bool plain = wnd->fx.opacity == 255 && (wnd->fx.flags & NX_FX_KEY) == 0;
   bool round = wnd_round(wnd);
+  FAR const struct nxbe_piece_s *p;
   struct nxgl_rect_s inner;
   struct nxgl_rect_s part[7];
   struct nxgl_rect_s dest;
+  struct nxgl_rect_s rel;
+  struct nxgl_rect_s x;
+  struct nxgl_rect_s abs;
   struct nx_blend_s b;
   int ncorner = 0;
   int n = 0;
+  int np;
   int i;
+  int k;
 
   rect_set(&inner, w->pt1.x + NXCOMP_R, w->pt1.y + NXCOMP_R,
            w->pt2.x - NXCOMP_R, w->pt2.y - NXCOMP_R);
@@ -958,25 +962,37 @@ static void comp_pixels(FAR struct nxbe_window_s *wnd,
           continue;
         }
 
-      op_blend_init(&b, &dest);
-      b.src.x = wnd->surfpos.x + part[i].pt1.x - w->pt1.x;
-      b.src.y = wnd->surfpos.y + part[i].pt1.y - w->pt1.y;
-      b.alpha = wnd->fx.opacity;
-      b.mode  = NX_BLEND_SRC_RGB;
-      if ((wnd->fx.flags & NX_FX_KEY) != 0)
-        {
-          b.mode |= NX_BLEND_KEY;
-          b.key   = (uint16_t)wnd->fx.key;
-        }
+      /* From each piece of its surface */
 
-      if (i < ncorner)
+      nxgl_rectoffset(&rel, &part[i], -w->pt1.x, -w->pt1.y);
+      np = nxbe_surface_pieces(wnd, &p);
+      for (k = 0; k < np; k++)
         {
-          b.mode |= NX_BLEND_MOD_LUT;
-          b.slot  = NX_LUT_CORNER;
-          op_inner(&b, &inner, off);
-        }
+          if (!nxbe_piece_part(&p[k], &rel, &x, &abs))
+            {
+              continue;
+            }
 
-      g_nxaccel->blend(&b);
+          nxgl_rectoffset(&dest, &x, w->pt1.x + off->x, w->pt1.y + off->y);
+          op_blend_init(&b, &dest);
+          b.src   = abs.pt1;
+          b.alpha = wnd->fx.opacity;
+          b.mode  = NX_BLEND_SRC_RGB;
+          if ((wnd->fx.flags & NX_FX_KEY) != 0)
+            {
+              b.mode |= NX_BLEND_KEY;
+              b.key   = (uint16_t)wnd->fx.key;
+            }
+
+          if (i < ncorner)
+            {
+              b.mode |= NX_BLEND_MOD_LUT;
+              b.slot  = NX_LUT_CORNER;
+              op_inner(&b, &inner, off);
+            }
+
+          g_nxaccel->blend(&b);
+        }
     }
 }
 
@@ -1171,14 +1187,21 @@ static void comp_gpuop(FAR struct nxbe_window_s *wnd,
                        FAR const struct nxgl_rect_s *clip)
 {
   FAR struct nxbe_window_s *src;
+  FAR const struct nxbe_piece_s *p;
   struct nxgl_rect_s whole;
   struct nxgl_rect_s dest;
+  struct nxgl_rect_s srel;
+  struct nxgl_rect_s x;
+  struct nxgl_rect_s abs;
+  struct nxgl_rect_s d;
   struct nxgl_point_s spos;
   uint8_t smode = op->mode & NX_BLEND_SRC_MASK;
   bool image = op->op == NX_GPUOP_COPY ||
                (op->op == NX_GPUOP_BLEND &&
                 (smode != NX_BLEND_SRC_COLOUR ||
                  (op->mode & NX_BLEND_EXT) != 0));
+  int np;
+  int k;
 
   if (op->w <= 0 || op->h <= 0 ||
       (op->op == NX_GPUOP_BLEND && (op->mode & NX_BLEND_EXT) != 0 &&
@@ -1187,6 +1210,8 @@ static void comp_gpuop(FAR struct nxbe_window_s *wnd,
       return;
     }
 
+  spos.x = 0;                             /* (a colour: no source) */
+  spos.y = 0;
   rect_set(&whole, org->x + op->x, org->y + op->y,
            org->x + op->x + op->w - 1, org->y + op->y + op->h - 1);
   nxgl_rectintersect(&dest, &whole, clip);
@@ -1214,12 +1239,160 @@ static void comp_gpuop(FAR struct nxbe_window_s *wnd,
        * as tall
        */
 
-      spos.x = src->surfpos.x + op->sx + dest.pt1.x - whole.pt1.x;
-      spos.y = ((op->mode & NX_BLEND_EXT) != 0 ? 4 * src->surfpos.y :
-                src->surfpos.y) + op->sy + dest.pt1.y - whole.pt1.y;
+      if ((op->mode & NX_BLEND_EXT) != 0)
+        {
+          /* (An image window: one surface of its own, at surfpos) */
+
+          spos.x = src->surfpos.x + op->sx + dest.pt1.x - whole.pt1.x;
+          spos.y = 4 * src->surfpos.y + op->sy + dest.pt1.y - whole.pt1.y;
+          comp_gpuop_do(op, org, &dest, &spos);
+          return;
+        }
+
+      /* The source's pieces: the part of dest each has the source of */
+
+      rect_set(&srel, op->sx + dest.pt1.x - whole.pt1.x,
+               op->sy + dest.pt1.y - whole.pt1.y,
+               op->sx + dest.pt2.x - whole.pt1.x,
+               op->sy + dest.pt2.y - whole.pt1.y);
+      np = nxbe_surface_pieces(src, &p);
+      for (k = 0; k < np; k++)
+        {
+          if (nxbe_piece_part(&p[k], &srel, &x, &abs))
+            {
+              nxgl_rectoffset(&d, &x, dest.pt1.x - srel.pt1.x,
+                              dest.pt1.y - srel.pt1.y);
+              comp_gpuop_do(op, org, &d, &abs.pt1);
+            }
+        }
+
+      return;
     }
 
   comp_gpuop_do(op, org, &dest, &spos);
+}
+
+/* A window in perspective: each piece of its surface drawn as the
+ * quadrilateral that the window's projective map makes of its rectangle,
+ * so that they meet without a seam (corners that are the window's are
+ * its own, exactly); the round corners are the window's.  The arithmetic
+ * is relative to the pixel at the corners' least x and y, so that the
+ * window looks the same wherever it is drawn (either display buffer).
+ */
+
+static int32_t quad_round(float v)
+{
+  return (int32_t)(v >= 0.0f ? v + 0.5f : v - 0.5f);
+}
+
+static void comp_quad(FAR struct nxbe_window_s *wnd, FAR const int32_t *x,
+                      FAR const int32_t *y,
+                      FAR const struct nxgl_rect_s *dest)
+{
+  FAR const struct nxbe_piece_s *p;
+  struct nx_quadpart_s part;
+  nxgl_coord_t w = wnd->bounds.pt2.x - wnd->bounds.pt1.x + 1;
+  nxgl_coord_t h = wnd->bounds.pt2.y - wnd->bounds.pt1.y + 1;
+  int radius = wnd_round(wnd) ? NXCOMP_R : 0;
+  int n = nxbe_surface_pieces(wnd, &p);
+  int32_t bx16 = MIN(MIN(x[0], x[1]), MIN(x[2], x[3])) & ~15;
+  int32_t by16 = MIN(MIN(y[0], y[1]), MIN(y[2], y[3])) & ~15;
+  float x0 = (x[0] - bx16) / 16.0f;
+  float y0 = (y[0] - by16) / 16.0f;
+  float x1 = (x[1] - bx16) / 16.0f;
+  float y1 = (y[1] - by16) / 16.0f;
+  float x2 = (x[2] - bx16) / 16.0f;
+  float y2 = (y[2] - by16) / 16.0f;
+  float x3 = (x[3] - bx16) / 16.0f;
+  float y3 = (y[3] - by16) / 16.0f;
+  float dx1 = x1 - x2;
+  float dx2 = x3 - x2;
+  float dx3 = x0 - x1 + x2 - x3;
+  float dy1 = y1 - y2;
+  float dy2 = y3 - y2;
+  float dy3 = y0 - y1 + y2 - y3;
+  float den = dx1 * dy2 - dx2 * dy1;
+  float a;
+  float b;
+  float c;
+  float d;
+  float e;
+  float f;
+  float g;
+  float hh;
+  int k;
+  int q;
+
+  /* Every piece drawn relative to the pixel at the corners' least x and
+   * y: the same pixels wherever the window is drawn
+   */
+
+  part.fw = w;
+  part.fh = h;
+  part.bx = bx16 >> 4;
+  part.by = by16 >> 4;
+  if (n == 1 && p[0].r.pt1.x == 0 && p[0].r.pt1.y == 0 &&
+      p[0].r.pt2.x == w - 1 && p[0].r.pt2.y == h - 1)
+    {
+      part.ox = 0;
+      part.oy = 0;
+      g_nxaccel->quad(&p[0].pos, w, h, x, y, radius, &part, dest);
+      return;
+    }
+
+  if (den > -1e-6f && den < 1e-6f)
+    {
+      return;                             /* Three corners in a line */
+    }
+
+  /* The map from the window's (u, v) in [0, 1] to the display */
+
+  g  = (dx3 * dy2 - dx2 * dy3) / den;
+  hh = (dx1 * dy3 - dx3 * dy1) / den;
+  a  = x1 - x0 + g * x1;
+  b  = x3 - x0 + hh * x3;
+  c  = x0;
+  d  = y1 - y0 + g * y1;
+  e  = y3 - y0 + hh * y3;
+  f  = y0;
+
+  for (k = 0; k < n; k++)
+    {
+      int32_t qx[4];
+      int32_t qy[4];
+      nxgl_coord_t pu[4];
+      nxgl_coord_t pv[4];
+
+      pu[0] = pu[3] = p[k].r.pt1.x;
+      pu[1] = pu[2] = p[k].r.pt2.x + 1;
+      pv[0] = pv[1] = p[k].r.pt1.y;
+      pv[2] = pv[3] = p[k].r.pt2.y + 1;
+      for (q = 0; q < 4; q++)
+        {
+          float u = (float)pu[q] / w;
+          float v = (float)pv[q] / h;
+          float wn = g * u + hh * v + 1.0f;
+
+          if ((pu[q] == 0 || pu[q] == w) && (pv[q] == 0 || pv[q] == h))
+            {
+              int corner = pv[q] == 0 ? (pu[q] == 0 ? 0 : 1) :
+                                        (pu[q] == 0 ? 3 : 2);
+
+              qx[q] = x[corner];
+              qy[q] = y[corner];
+            }
+          else
+            {
+              qx[q] = bx16 + quad_round((a * u + b * v + c) / wn * 16.0f);
+              qy[q] = by16 + quad_round((d * u + e * v + f) / wn * 16.0f);
+            }
+        }
+
+      part.ox = p[k].r.pt1.x;
+      part.oy = p[k].r.pt1.y;
+      g_nxaccel->quad(&p[k].pos, pu[1] - pu[0], pv[2] - pv[0], qx, qy,
+                      radius, &part, dest);
+    }
 }
 
 /* Draw one window where it meets display rectangle r */
@@ -1271,10 +1444,7 @@ static void comp_window(FAR struct nxbe_window_s *wnd,
         }
 
       nxgl_rectoffset(&dest, r, off->x, off->y);
-      g_nxaccel->quad(&wnd->surfpos,
-                      wnd->bounds.pt2.x - wnd->bounds.pt1.x + 1,
-                      wnd->bounds.pt2.y - wnd->bounds.pt1.y + 1,
-                      x, y, wnd_round(wnd) ? NXCOMP_R : 0, &dest);
+      comp_quad(wnd, x, y, &dest);
       return;
     }
 
@@ -1614,11 +1784,10 @@ static void comp_getback(bool pack)
           return;
         }
 
-      nxbe_surface_compact();
       g_comp.packed   = true;
       g_comp.lastpack = clock_systime_ticks();
-      if (g_nxaccel->surface_alloc(be->vinfo.xres, be->vinfo.yres,
-                                   NX_SURFACE_BUFFER, &pos) < 0)
+      if (!nxbe_surface_take(be->vinfo.xres, be->vinfo.yres,
+                             NX_SURFACE_BUFFER, &pos))
         {
           return;
         }
@@ -1975,9 +2144,14 @@ static void comp_snapshot(void)
 
       if (wnd->surface)
         {
+          FAR const struct nxbe_piece_s *p;
+          int np = nxbe_surface_pieces(wnd, &p);
+
           px = (uint32_t)wnd->surfsize.w * wnd->surfsize.h;
           st.nsurf++;
           st.surfpx += px;
+          st.npieces += np;
+          st.nsplit  += np > 1;
           if (wnd->surfkind == NX_SURFACE_IMAGE)
             {
               st.nimage++;
@@ -2550,6 +2724,31 @@ void nxbe_compose_setdlist(FAR struct nxbe_window_s *wnd,
     }
 }
 
+/* A copy within a window whose surface is in pieces (window coordinates,
+ * clipped to it)
+ */
+
+static void comp_selfcopy(FAR struct nxbe_window_s *wnd,
+                          FAR const struct nx_gpuop_s *op)
+{
+  struct nxgl_rect_s win;
+  struct nxgl_rect_s d;
+  struct nxgl_rect_s s;
+  struct nxgl_point_s off;
+
+  rect_set(&win, 0, 0, wnd->surfsize.w - 1, wnd->surfsize.h - 1);
+  rect_set(&d, op->x, op->y, op->x + op->w - 1, op->y + op->h - 1);
+  nxgl_rectintersect(&d, &d, &win);
+  off.x = op->x - op->sx;
+  off.y = op->y - op->sy;
+  nxgl_rectoffset(&s, &d, -off.x, -off.y);
+  nxgl_rectintersect(&s, &s, &win);
+  if (!rect_empty(&s))
+    {
+      nxbe_surface_move(wnd, &s, &off);
+    }
+}
+
 /****************************************************************************
  * Name: nxbe_compose_gpuops
  *
@@ -2562,10 +2761,14 @@ void nxbe_compose_setdlist(FAR struct nxbe_window_s *wnd,
 void nxbe_compose_gpuops(FAR struct nxbe_window_s *wnd,
                          FAR const struct nx_gpuop_s *ops, int nops)
 {
+  FAR const struct nxbe_piece_s *p;
   struct nxgl_rect_s clip;
   struct nxgl_rect_s dirty;
   struct nxgl_rect_s r;
+  struct nxgl_point_s org;
+  int np;
   int i;
+  int k;
 
   if (!g_comp.on)
     {
@@ -2592,14 +2795,32 @@ void nxbe_compose_gpuops(FAR struct nxbe_window_s *wnd,
       return;
     }
 
-  rect_set(&clip, wnd->surfpos.x, wnd->surfpos.y,
-           wnd->surfpos.x + wnd->bounds.pt2.x - wnd->bounds.pt1.x,
-           wnd->surfpos.y + wnd->bounds.pt2.y - wnd->bounds.pt1.y);
   rect_set(&dirty, INT16_MAX, INT16_MAX, INT16_MIN, INT16_MIN);
-
+  np = nxbe_surface_pieces(wnd, &p);
   for (i = 0; i < nops; i++)
     {
-      comp_gpuop(wnd, &ops[i], &wnd->surfpos, &clip);
+      FAR const struct nx_gpuop_s *op = &ops[i];
+
+      if (np > 1 && op->op == NX_GPUOP_COPY &&
+          (op->src == NULL || op->src == (FAR void *)wnd))
+        {
+          /* A copy within the window, across pieces */
+
+          comp_selfcopy(wnd, op);
+        }
+      else
+        {
+          /* Into each piece, what of the operation lies there */
+
+          for (k = 0; k < np; k++)
+            {
+              org.x = p[k].pos.x - p[k].r.pt1.x;
+              org.y = p[k].pos.y - p[k].r.pt1.y;
+              nxgl_rectoffset(&clip, &p[k].r, org.x, org.y);
+              comp_gpuop(wnd, op, &org, &clip);
+            }
+        }
+
       rect_set(&r, ops[i].x, ops[i].y, ops[i].x + ops[i].w - 1,
                ops[i].y + ops[i].h - 1);
       if (!rect_empty(&r))
@@ -2876,6 +3097,45 @@ int nxbe_compose_idle(void)
     }
 
   return next < 0 ? -1 : MAX(next, (int32_t)NXCOMP_IDLEPOLL);
+}
+
+/****************************************************************************
+ * Name: nxbe_compose_windows
+ *
+ * Description:
+ *   The RAM-backed windows as text, a line each (/proc/gpumap): size,
+ *   where on the display, where its pixels are (pieces of the surface,
+ *   cells, memory, parked), hidden, seen, in perspective.  Not locked:
+ *   for looking at, not for programs.
+ *
+ ****************************************************************************/
+
+size_t nxbe_compose_windows(FAR char *buf, size_t size)
+{
+  FAR struct nxbe_window_s *wnd;
+  size_t n = 0;
+  int r;
+
+  for (wnd = nxbe_surface_list(); wnd != NULL && n < size; wnd = wnd->surfnext)
+    {
+      FAR const struct nxbe_piece_s *p;
+      int np = wnd->surface ? nxbe_surface_pieces(wnd, &p) : 0;
+
+      r = snprintf(buf + n, size - n, "%4dx%-4d at %5d,%-5d %s%s%s%s%s %d\n",
+                   wnd->bounds.pt2.x - wnd->bounds.pt1.x + 1,
+                   wnd->bounds.pt2.y - wnd->bounds.pt1.y + 1,
+                   wnd->bounds.pt1.x, wnd->bounds.pt1.y,
+                   wnd->surface ? "surface" : wnd->parked ? "parked" :
+                   wnd->fbmem != NULL ? "memory" : "none",
+                   NXBE_ISHIDDEN(wnd) ? " hidden" : "",
+                   g_comp.on && comp_seen(wnd) ? " seen" : "",
+                   wnd_quad(wnd) ? " quad" : "",
+                   wnd->surface && wnd->surfkind == NX_SURFACE_IMAGE ?
+                   " image" : "", np);
+      n += r > 0 ? (size_t)r : 0;
+    }
+
+  return n < size ? n : size;
 }
 
 /****************************************************************************

@@ -351,16 +351,82 @@ void nxbe_accel_flush(void);
  */
 
 #ifdef CONFIG_NX_RAMBACKED
+/* A window's surface is made of the hardware's cells (nx_accel_s
+ * cells_alloc), wherever they were free: in pieces, each a rectangle of
+ * the window (its own coordinates) whose pixels are together in memory,
+ * r.pt1's at pos.  An image window's (BC1 blocks) is one piece, a
+ * surface of its own (cw = 0).  nxbe_surface_pieces() gives them (made
+ * again when the cells have changed); the operations below are done on
+ * each piece a rectangle of the window (rel) meets.
+ */
+
+struct nxbe_piece_s
+{
+  struct nxgl_rect_s r;               /* Of the window */
+  struct nxgl_point_s pos;            /* Where r.pt1 is */
+};
+
+struct nxbe_cells_s
+{
+  nxgl_coord_t w;                     /* The surface's size */
+  nxgl_coord_t h;
+  uint8_t cw;                         /* Its cells across and down (0: one */
+  uint8_t ch;                         /* surface, at the window's surfpos) */
+  bool dirty;                         /* pieces[] to be made again */
+  uint16_t npieces;
+  uint16_t maxpieces;
+  FAR struct nxbe_piece_s *pieces;
+  uint16_t map[1];                    /* cw x ch: the cells, a row after
+                                       * another (NX_CELL_NONE: none) */
+};
+
+int  nxbe_surface_pieces(FAR struct nxbe_window_s *wnd,
+                         FAR const struct nxbe_piece_s **pieces);
+
+/* The part x of rel (window coordinates) that piece p holds, and where
+ * that is in the hardware's memory (abs); false if none
+ */
+
+static inline bool nxbe_piece_part(FAR const struct nxbe_piece_s *p,
+                                   FAR const struct nxgl_rect_s *rel,
+                                   FAR struct nxgl_rect_s *x,
+                                   FAR struct nxgl_rect_s *abs)
+{
+  nxgl_rectintersect(x, rel, &p->r);
+  if (x->pt1.x > x->pt2.x || x->pt1.y > x->pt2.y)
+    {
+      return false;
+    }
+
+  nxgl_rectoffset(abs, x, p->pos.x - p->r.pt1.x, p->pos.y - p->r.pt1.y);
+  return true;
+}
+void nxbe_surface_fill(FAR struct nxbe_window_s *wnd,
+                       FAR const struct nxgl_rect_s *rel,
+                       nxgl_mxpixel_t color);
+void nxbe_surface_put(FAR struct nxbe_window_s *wnd,
+                      FAR const struct nxgl_rect_s *rel,
+                      FAR const void *src, unsigned int stride);
+void nxbe_surface_get(FAR struct nxbe_window_s *wnd,
+                      FAR const struct nxgl_rect_s *rel,
+                      FAR void *dest, unsigned int stride);
+void nxbe_surface_move(FAR struct nxbe_window_s *wnd,
+                       FAR const struct nxgl_rect_s *rel,
+                       FAR const struct nxgl_point_s *offset);
+void nxbe_surface_copyto(FAR struct nxbe_window_s *wnd,
+                         FAR const struct nxgl_rect_s *rel,
+                         FAR const struct nxgl_point_s *dest);
+bool nxbe_surface_take(nxgl_coord_t w, nxgl_coord_t h, int kind,
+                       FAR struct nxgl_point_s *pos);
+
 bool nxbe_surface_open(FAR struct nxbe_window_s *wnd);
 bool nxbe_surface_resize(FAR struct nxbe_window_s *wnd, FAR bool *lost);
-bool nxbe_surface_relocate(FAR struct nxbe_window_s *wnd);
 void nxbe_surface_evacuate(FAR const struct nxgl_rect_s *keep);
 void nxbe_surface_tomemory(FAR struct nxbe_window_s *wnd);
 void nxbe_surface_close(FAR struct nxbe_window_s *wnd);
 void nxbe_surface_present(FAR struct nxbe_window_s *wnd,
                           FAR const struct nxgl_rect_s *dest);
 FAR struct nxbe_window_s *nxbe_surface_list(void);
-void nxbe_surface_compact(void);
 #ifdef CONFIG_NX_COMPOSITOR
 bool nxbe_surface_park(FAR struct nxbe_window_s *wnd);
 void nxbe_surface_unpark(FAR struct nxbe_window_s *wnd);

@@ -192,6 +192,8 @@ struct nx_compose_stats_s
                                   * back */
   uint32_t srccached;            /* ... and found read already */
   uint32_t tosurface;            /* Memory windows moved into surfaces */
+  uint16_t npieces;              /* Windows' surfaces: pieces in all */
+  uint16_t nsplit;               /* ... windows in more than one */
 };
 
 /****************************************************************************
@@ -316,6 +318,7 @@ int nx_setlut(FAR void *handle, int slot,
  ****************************************************************************/
 
 void nxbe_compose_stats(FAR struct nx_compose_stats_s *st);
+size_t nxbe_compose_windows(FAR char *buf, size_t size);
 
 #undef EXTERN
 #ifdef __cplusplus

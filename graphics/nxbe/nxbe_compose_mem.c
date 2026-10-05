@@ -204,11 +204,11 @@ static void cache_fill(FAR struct nxbe_window_s *src,
           continue;
         }
 
-      r.pt1.x = src->surfpos.x;
-      r.pt1.y = src->surfpos.y + top;
-      r.pt2.x = src->surfpos.x + c->w - 1;
-      r.pt2.y = r.pt1.y + rows - 1;
-      g_nxaccel->get(&r, c->pix + (size_t)top * c->w, c->w * 2);
+      r.pt1.x = 0;
+      r.pt1.y = top;
+      r.pt2.x = c->w - 1;
+      r.pt2.y = top + rows - 1;
+      nxbe_surface_get(src, &r, c->pix + (size_t)top * c->w, c->w * 2);
       c->valid[b] = 1;
       g_nxbe_counts.srcread += (uint32_t)c->w * rows;
     }
@@ -285,10 +285,9 @@ static bool mem_source(FAR struct nxbe_window_s *src, int sx, int sy,
     {
       FAR uint16_t *dest = buf + (r.pt1.y - sy) * w + (r.pt1.x - sx);
 
-      nxgl_rectoffset(&r, &r, src->surfpos.x, src->surfpos.y);
       if (g_nxaccel->get != NULL)
         {
-          g_nxaccel->get(&r, dest, w * 2);
+          nxbe_surface_get(src, &r, dest, w * 2);
           g_nxbe_counts.srcread += (uint32_t)(r.pt2.x - r.pt1.x + 1) *
                                    (r.pt2.y - r.pt1.y + 1);
         }

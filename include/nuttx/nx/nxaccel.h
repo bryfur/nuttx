@@ -92,6 +92,18 @@ struct nx_blend_s
                                         * ramp: origin, step, start (8.8) */
 };
 
+/* A part of a larger image drawn in perspective (nx_accel_s quad) */
+
+struct nx_quadpart_s
+{
+  nxgl_coord_t ox;                     /* This part's place in the image */
+  nxgl_coord_t oy;
+  nxgl_coord_t fw;                     /* The image's size */
+  nxgl_coord_t fh;
+  nxgl_coord_t bx;                     /* The display pixel every part is */
+  nxgl_coord_t by;                     /* drawn relative to */
+};
+
 /* Display operations done by the display hardware (a GPU) instead of by
  * the NX server writing the framebuffer (CONFIG_NX_ACCEL).  With these the
  * server does not touch the framebuffer memory at all, and the update
@@ -150,6 +162,36 @@ struct nx_accel_s
   CODE void (*surface_free)(FAR const struct nxgl_point_s *pos,
                             nxgl_coord_t w, nxgl_coord_t h);
 
+  /* Cells, optional (NULL): the memory as a grid of squares of
+   * 1 << cellshift pixels, which a window's surface may be made of, in as
+   * many pieces as there must be (no room is ever lost to fragments).  A
+   * cell is named by its place: (x | y << 8) for the cell at (x << shift,
+   * y << shift); NX_CELL_NONE is none.  cells_alloc() gives a cell to
+   * every entry of map (cw x ch, a row of the window's cells after
+   * another) that is NX_CELL_NONE, the window's neighbours together in
+   * memory where there is room for them so, and returns 0; or none and
+   * -ENOMEM if there are not enough.  cells_free() gives n back.
+   *
+   * surface_alloc() with NX_SURFACE_DISPLACE in kind may put the surface
+   * over cells that windows have: those are then the surface's, no longer
+   * the windows' (not to be freed), and NX moves what they hold elsewhere
+   * before it draws into the surface.  It fails only if the cells free
+   * outside it would not take them.
+   */
+
+  CODE int  (*cells_alloc)(int cw, int ch, FAR uint16_t *map);
+  CODE int  (*cells_free_count)(void);
+  CODE void (*cells_free)(int n, FAR const uint16_t *cells);
+  uint8_t cellshift;
+
+  /* Read a rectangle straight into memory over a fast path, optional
+   * (NULL): x and w even; buf receives a word before the pixels (two a
+   * word, rows packed) and one after them.  0 or a negated errno value.
+   */
+
+  CODE int  (*readbulk)(FAR const struct nxgl_rect_s *rect,
+                        FAR uint32_t *buf);
+
   /* Per-pixel blending, optional (NULL): a colour or an image blended into
    * a rectangle with an alpha made of a global value, the image's own
    * alpha and a shape (a lookup table of distances from an inner
@@ -191,14 +233,19 @@ struct nx_accel_s
   /* An image in perspective, optional (NULL): the w x h rectangle at src
    * (a surface) drawn as any convex quadrilateral, its corners (top-left,
    * top-right, bottom-right, bottom-left) at (x[k], y[k]) in 1/16 pixels,
-   * only inside clip; radius > 0: the image's corners cut round by circles
-   * of that radius (image pixels), as a window's.  For NX_FX_QUAD
-   * (nxcompose.h)
+   * only inside clip; radius > 0: the image's corners cut round by
+   * circles of that radius (image pixels), as a window's.  part (NULL:
+   * none) says the image is a part of a larger one drawn in parts (a
+   * window's surface in pieces): its corners are the ones cut, and all
+   * parts are drawn relative to the same point, so that they meet
+   * without a seam and look the same wherever they are drawn.  For
+   * NX_FX_QUAD (nxcompose.h)
    */
 
   CODE void (*quad)(FAR const struct nxgl_point_s *src, nxgl_coord_t w,
                     nxgl_coord_t h, FAR const int32_t *x,
                     FAR const int32_t *y, int radius,
+                    FAR const struct nx_quadpart_s *part,
                     FAR const struct nxgl_rect_s *clip);
 
   /* Whether the hardware has lost what its memory held (every surface's
@@ -222,6 +269,13 @@ struct nx_accel_s
 #define NX_SURFACE_BUFFER     1        /* A display buffer */
 #define NX_SURFACE_STAGE      2        /* Staging for windows in memory */
 #define NX_SURFACE_IMAGE      3        /* A window of image data (BC1) */
+#define NX_SURFACE_KINDMASK   0xff
+#define NX_SURFACE_DISPLACE   0x100    /* Over windows' cells if it must be */
+
+#define NX_CELL_NONE          0xffff   /* cells_alloc(): no cell */
+#define NX_CELL_X(c)          ((c) & 0xff)
+#define NX_CELL_Y(c)          ((c) >> 8)
+#define NX_CELL(x, y)         ((uint16_t)((x) | (y) << 8))
 
 /****************************************************************************
  * Public Function Prototypes
