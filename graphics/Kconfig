@@ -185,7 +185,7 @@ config NX_COMPOSITOR_MAXDAMAGE
 
 config NX_COMPOSITOR_SWAP
 	int "Swap: memory for windows' covered parts (KB)"
-	default 3072
+	default 4096
 	---help---
 		With the hardware's cells (nx_accel_s cells_alloc), the parts of
 		windows that are not seen (covered) may give up their cells when

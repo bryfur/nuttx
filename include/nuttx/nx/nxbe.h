@@ -158,6 +158,7 @@ struct nxbe_state_s;
 struct nxmu_conn_s;
 struct nxbe_srccache_s;
 struct nxbe_cells_s;
+struct nxbe_mip_s;
 
 struct nxbe_window_s
 {
@@ -224,6 +225,9 @@ struct nxbe_window_s
   struct nx_effects_s fx;
   FAR struct nx_gpuop_s *dlist;       /* NXBE_WINDOW_LAYER: its operations */
   int ndlist;
+  FAR struct nxbe_mip_s *mip;         /* Small in perspective: a smaller
+                                       * picture of it (nxbe_compose.c) */
+  uint8_t miplevel;                   /* ... how much smaller it may be */
 #endif
 
   /* Client state information this is provide in window callbacks

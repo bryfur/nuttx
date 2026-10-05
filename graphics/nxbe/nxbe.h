@@ -379,7 +379,9 @@ struct nxbe_cells_s
   uint16_t nswap;                     /* Cells with a copy in the swap */
   uint16_t nlost;                     /* Cells lost (CELL_LOST) */
   FAR struct nxbe_piece_s *pieces;
-  FAR int16_t *swap;                  /* cw x ch: the swap's slot, or -1 */
+  FAR int32_t *swap;                  /* cw x ch: the swap's slot; a cell
+                                       * of one colour, that colour, as
+                                       * NXBE_SWAP_COLOUR(); or -1 */
   FAR uint8_t *flags;                 /* cw x ch: NXBE_CELL_* */
   uint16_t map[1];                    /* cw x ch: the cells, a row after
                                        * another (NX_CELL_NONE: none) */
@@ -395,12 +397,17 @@ struct nxbe_cells_s
  * are the resident cells'.
  */
 
-#define NXBE_CELL_SWAP  0x01          /* The swap's slot holds its pixels */
+#define NXBE_CELL_SWAP  0x01          /* The swap holds its pixels (a slot,
+                                       * or one colour) */
 #define NXBE_CELL_LOST  0x02          /* Not resident, its pixels gone */
 #define NXBE_CELL_NEED  0x04          /* Seen: must be resident */
 
 #define NX_CELL_SKIP    0xfffe        /* (cells_alloc(): not to be placed,
                                        * an entry it takes as placed) */
+
+#define NXBE_SWAP_COLOUR(c)   (-2 - (int32_t)(c))   /* A cell all colour c */
+#define NXBE_SWAP_ISCOLOUR(s) ((s) <= -2)
+#define NXBE_SWAP_THECOLOUR(s) ((uint16_t)(-2 - (s)))
 
 int  nxbe_surface_pieces(FAR struct nxbe_window_s *wnd,
                          FAR const struct nxbe_piece_s **pieces);
@@ -440,6 +447,8 @@ void nxbe_surface_copyto(FAR struct nxbe_window_s *wnd,
                          FAR const struct nxgl_point_s *dest);
 bool nxbe_surface_take(nxgl_coord_t w, nxgl_coord_t h, int kind,
                        FAR struct nxgl_point_s *pos);
+void nxbe_surface_drawing(FAR struct nxbe_window_s *wnd,
+                          FAR const struct nxgl_rect_s *rel);
 void nxbe_surface_drawn(FAR struct nxbe_window_s *wnd,
                         FAR const struct nxgl_rect_s *rel);
 void nxbe_surface_lose(FAR struct nxbe_window_s *wnd,
@@ -448,8 +457,11 @@ bool nxbe_surface_resident(FAR struct nxbe_window_s *wnd,
                            FAR const struct nxgl_rect_s *rel);
 bool nxbe_surface_defrag(FAR struct nxbe_window_s *wnd);
 #ifdef CONFIG_NX_COMPOSITOR
-bool nxbe_surface_ensure(FAR struct nxbe_window_s *wnd);
+bool nxbe_surface_ensure(FAR struct nxbe_window_s *wnd, int how);
+#define NXBE_ENSURE_ROOM 1            /* Room made for them */
+#define NXBE_ENSURE_HOLD 2            /* The frame waits for redrawing */
 int  nxbe_surface_evict(int want, bool io);
+int  nxbe_surface_clean(int max);
 #endif
 
 bool nxbe_surface_open(FAR struct nxbe_window_s *wnd);
@@ -547,6 +559,9 @@ struct nxbe_swapstats_s
   uint32_t lost;                      /* Cells lost (none to read into) */
   uint32_t redrawn;                   /* ... drawn again by their clients */
   uint32_t freed;                     /* Cells given up, a copy there */
+  uint32_t uniform;                   /* Cells read back of one colour
+                                       * (kept as that colour) */
+  uint32_t cleaned;                   /* Copies made of cells kept */
   uint32_t refused;                   /* The heap said no */
   uint64_t outus;                     /* Time reading back */
   uint64_t inus;                      /* ... putting back */
@@ -565,6 +580,15 @@ void nxbe_swap_usage(FAR uint32_t *slots, FAR uint32_t *bytes);
  */
 
 void nxbe_compose_needs(bool all);
+void nxbe_compose_mipdirty(FAR struct nxbe_window_s *wnd,
+                           FAR const struct nxgl_rect_s *rel);
+FAR struct nxbe_cells_s *nxbe_compose_mipcells(FAR struct nxbe_window_s *wnd);
+void nxbe_compose_mipfree(FAR struct nxbe_window_s *wnd);
+int  nxbe_compose_mipdrop(void);
+FAR struct nxbe_cells_s *nxbe_cells_make(nxgl_coord_t w, nxgl_coord_t h);
+void nxbe_cells_drop(FAR struct nxbe_cells_s *c);
+int  nxbe_cells_pieces(FAR struct nxbe_cells_s *c,
+                       FAR const struct nxbe_piece_s **pieces);
 
 /* Counters for nxbe_compose_stats() */
 
@@ -576,6 +600,10 @@ struct nxbe_counts_s
   uint32_t srcread;
   uint32_t srccached;
   uint32_t tosurface;
+  uint32_t holds;                     /* Frames held for windows drawn again */
+  uint32_t holdticks;                 /* ... and how long */
+  uint64_t prepus;                    /* Frames: making ready (residency) */
+  uint64_t drawus;                    /* ... drawing (sending the GPU's) */
 };
 
 EXTERN struct nxbe_counts_s g_nxbe_counts;

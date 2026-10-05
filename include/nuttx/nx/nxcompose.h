@@ -205,6 +205,12 @@ struct nx_compose_stats_s
   uint32_t redrawn;              /* ... drawn again by their clients */
   uint64_t swapoutus;            /* Time reading back */
   uint64_t swapinus;             /* ... putting back */
+  uint32_t swapuniform;          /* Cells read back of one colour */
+  uint32_t swapcleaned;          /* Copies made of cells kept */
+  uint32_t holds;                /* Frames held for windows drawn again */
+  uint32_t holdms;               /* ... how long in all */
+  uint32_t prepms;               /* Frames: making ready (residency) */
+  uint32_t drawms;               /* ... drawing */
 };
 
 /****************************************************************************
