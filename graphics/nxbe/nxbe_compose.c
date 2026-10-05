@@ -100,6 +100,8 @@
 #define NXCOMP_MAXADD     64      /* Damage from moves, in one frame */
 #define NXCOMP_STAGEH     16      /* Staging: lines of a window in memory */
 #define NXCOMP_MAXCOVER   24      /* Parking: opaque windows over one */
+#define NXCOMP_QUADSPLIT  3       /* Windows in perspective a damaged
+                                   * rectangle is split by, at most */
 #define NXCOMP_IDLEPOLL   MSEC2TICK(50)    /* Parking: looked at so often */
 #define NXCOMP_QUIET      MSEC2TICK(400)   /* ... and not while windows move */
 #define NXCOMP_PARKHIDDEN MSEC2TICK(500)   /* ... hidden so long */
@@ -527,16 +529,43 @@ static inline void wnd_extent(FAR struct nxbe_window_s *wnd,
   wnd_extent_at(wnd, &wnd->bounds, ext);
 }
 
+/* Shown in perspective: the rectangle its quadrilateral surely hides
+ * (inside it, clear of the round corners), false if none
+ */
+
+static bool wnd_quadcover(FAR struct nxbe_window_s *wnd,
+                          FAR struct nxgl_rect_s *c)
+{
+  struct nxgl_rect_s avg;
+  struct nxgl_rect_s in;
+
+  if (!wnd_quad(wnd) || NXBE_ISHIDDEN(wnd))
+    {
+      return false;
+    }
+
+  wnd_quadrects_at(wnd, &wnd->bounds, &avg, &in);
+  rect_set(c, in.pt1.x + NXCOMP_R, in.pt1.y + NXCOMP_R,
+           in.pt2.x - NXCOMP_R, in.pt2.y - NXCOMP_R);
+  return !rect_empty(c);
+}
+
 /* Does the window hide everything below it in r? */
 
 static bool wnd_covers(FAR struct nxbe_window_s *wnd,
                        FAR const struct nxgl_rect_s *r)
 {
   FAR const struct nxgl_rect_s *b = &wnd->bounds;
+  struct nxgl_rect_s c;
 
   if (wnd == &g_comp.be->bkgd)
     {
       return true;
+    }
+
+  if (wnd_quad(wnd))
+    {
+      return wnd_quadcover(wnd, &c) && rect_contains(&c, r);
     }
 
   if (!wnd_pixels(wnd) || wnd->fx.opacity != 255 || wnd_quad(wnd) ||
@@ -1305,22 +1334,84 @@ static void comp_window(FAR struct nxbe_window_s *wnd,
     }
 }
 
-/* Composite display rectangle r, at off: from the top window that hides
- * everything below it there, up
+static int rect_minus(FAR const struct nxgl_rect_s *p,
+                      FAR const struct nxgl_rect_s *c,
+                      FAR struct nxgl_rect_s part[4]);
+
+/* Composite display rectangle r at off, from the top window that hides
+ * everything below it up to top (inclusive).  A window in perspective
+ * that hides part of r splits what is below it (split: how many more
+ * times that may happen), so that what its quadrilateral hides is not
+ * drawn for nothing; it, and what is above it, are drawn over all of r
+ * (its rows whole, as when nothing splits; and not if a window in
+ * perspective below would have its rows cut).
  */
 
+/* Is there a window in perspective below wnd in r whose rows splitting r
+ * around c would cut (one beside c, left or right, is not cut)?
+ */
+
+static bool quad_below(FAR struct nxbe_window_s *wnd,
+                       FAR const struct nxgl_rect_s *r,
+                       FAR const struct nxgl_rect_s *c)
+{
+  struct nxgl_rect_s box;
+
+  for (wnd = wnd->below; wnd != NULL; wnd = wnd->below)
+    {
+      if (wnd_quad(wnd) && !NXBE_ISHIDDEN(wnd))
+        {
+          wnd_quadbox_at(wnd, &wnd->bounds, &box);
+          if (nxgl_rectoverlap(&box, (FAR struct nxgl_rect_s *)r) &&
+              box.pt2.x >= c->pt1.x && box.pt1.x <= c->pt2.x)
+            {
+              return true;
+            }
+        }
+    }
+
+  return false;
+}
+
 static void comp_rect(FAR const struct nxgl_rect_s *r,
-                      FAR const struct nxgl_point_s *off)
+                      FAR const struct nxgl_point_s *off,
+                      FAR struct nxbe_window_s *top, int split)
 {
   FAR struct nxbe_state_s *be = g_comp.be;
   FAR struct nxbe_window_s *start;
   FAR struct nxbe_window_s *wnd;
   struct nxgl_rect_s ext;
+  struct nxgl_rect_s c;
 
-  for (start = be->topwnd; start != NULL; start = start->below)
+  for (start = top; start != NULL; start = start->below)
     {
       if (wnd_covers(start, r))
         {
+          break;
+        }
+
+      if (split > 0 && wnd_quadcover(start, &c) &&
+          nxgl_rectoverlap(&c, (FAR struct nxgl_rect_s *)r) &&
+          !quad_below(start, r, &c))
+        {
+          struct nxgl_rect_s part[4];
+          int n = rect_minus(r, &c, part);
+          int k;
+
+          /* Below it: only around what it hides */
+
+          for (k = 0; k < n; k++)
+            {
+              if (start->below != NULL)
+                {
+                  comp_rect(&part[k], off, start->below, split - 1);
+                }
+              else
+                {
+                  comp_window(&be->bkgd, &part[k], off);
+                }
+            }
+
           break;
         }
     }
@@ -1331,7 +1422,8 @@ static void comp_rect(FAR const struct nxgl_rect_s *r,
     }
 
   comp_window(start, r, off);
-  for (wnd = start->above; wnd != NULL; wnd = wnd->above)
+  for (wnd = start->above; wnd != NULL && wnd != top->above;
+       wnd = wnd->above)
     {
       wnd_extent(wnd, &ext);
       if (nxgl_rectoverlap(&ext, (FAR struct nxgl_rect_s *)r))
@@ -2103,6 +2195,64 @@ void nxbe_compose_damage(FAR const struct nxgl_rect_s *rect)
       return;
     }
 
+  /* Reaching into a window in perspective: all of it, so that its rows
+   * are always drawn whole (where a row starts decides which texels it
+   * shows: a part drawn again must look the same)
+   */
+
+  {
+    FAR struct nxbe_window_s *wnd;
+    struct nxgl_rect_s box;
+    bool grown;
+
+    do
+      {
+        grown = false;
+        for (wnd = g_comp.be->topwnd; wnd != NULL; wnd = wnd->below)
+          {
+            if (!wnd_quad(wnd) || NXBE_ISHIDDEN(wnd))
+              {
+                continue;
+              }
+
+            wnd_quadbox_at(wnd, &wnd->bounds, &box);
+            nxgl_rectintersect(&box, &box, &g_comp.be->bkgd.bounds);
+            if (nxgl_rectoverlap(&box, &r) && !rect_contains(&r, &box))
+              {
+                nxgl_rectunion(&r, &r, &box);
+                grown = true;             /* (It may reach more now) */
+              }
+          }
+      }
+    while (grown);
+  }
+
+  /* One that overlaps it much becomes one with it, so that what moves a
+   * little (a window in perspective: its quadrilateral then and now) is
+   * drawn once, not again where the two overlap
+   */
+
+  for (i = 0; i < g_comp.ndamage; i++)
+    {
+      FAR struct nxgl_rect_s *a = &g_comp.damage[i];
+      struct nxgl_rect_s x;
+
+      nxgl_rectintersect(&x, a, &r);
+      if (rect_empty(&x))
+        {
+          continue;
+        }
+
+      nxgl_rectunion(&u, a, &r);
+      if (4 * (rect_area(&u) - rect_area(a) - rect_area(&r) +
+               rect_area(&x)) <= rect_area(&u))
+        {
+          r = u;
+          g_comp.damage[i] = g_comp.damage[--g_comp.ndamage];
+          i = -1;                         /* (Again, with the union) */
+        }
+    }
+
   for (i = 0; i < g_comp.ndamage; i++)
     {
       if (rect_contains(&g_comp.damage[i], &r))
@@ -2582,7 +2732,8 @@ void nxbe_compose_run(void)
   off = g_comp.buf[comp_back()];
   for (i = 0; i < g_comp.ndamage; i++)
     {
-      comp_rect(&g_comp.damage[i], &off);
+      comp_rect(&g_comp.damage[i], &off, g_comp.be->topwnd,
+                NXCOMP_QUADSPLIT);
     }
 
   /* Show it; the other buffer lacks what it changed */
