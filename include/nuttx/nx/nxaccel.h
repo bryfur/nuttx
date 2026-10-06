@@ -187,6 +187,14 @@ struct nx_accel_s
   CODE void (*cells_free)(int n, FAR const uint16_t *cells);
   uint8_t cellshift;
 
+  /* The space surfaces and the display share (0: not said): a second
+   * display buffer is only tried where one of the mode's size can fit
+   * beside or below the display at (0, 0)
+   */
+
+  nxgl_coord_t spacew;
+  nxgl_coord_t spaceh;
+
   /* Read a rectangle straight into memory over a fast path, optional
    * (NULL): x and w even; buf receives a word before the pixels (two a
    * word, rows packed) and one after them.  0 or a negated errno value.

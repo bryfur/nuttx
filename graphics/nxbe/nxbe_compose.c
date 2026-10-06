@@ -2318,6 +2318,22 @@ static void comp_flip(int buf)
   g_comp.lastflip = clock_systime_ticks();
 }
 
+/* Whether a second buffer of the mode's size can lie in the space at all,
+ * beside or below the display at (0, 0): not at 1920 x 1080 in 2048 x
+ * 2048, where the display is composited in place (single buffered: a
+ * frame being composited may show partly drawn; windows are not evicted
+ * for a buffer that cannot be placed)
+ */
+
+static bool comp_backfits(void)
+{
+  FAR struct nxbe_state_s *be = g_comp.be;
+
+  return g_nxaccel->spacew == 0 ||
+         g_nxaccel->spacew - be->vinfo.xres >= be->vinfo.xres ||
+         g_nxaccel->spaceh - be->vinfo.yres >= be->vinfo.yres;
+}
+
 /* Get a second display buffer if there is room, compacting the surfaces
  * for it unless done recently (pack forces it).  The new buffer is empty:
  * all of the display counts as the last frame's change.
@@ -2329,7 +2345,7 @@ static void comp_getback(bool pack)
   struct nxgl_point_s pos;
 
   g_comp.retry = false;
-  if (g_comp.dbuf || g_nxaccel->flip == NULL)
+  if (g_comp.dbuf || g_nxaccel->flip == NULL || !comp_backfits())
     {
       return;
     }
@@ -3411,6 +3427,7 @@ static void comp_swapidle(FAR int32_t *next)
     }
 
   if (!g_comp.dbuf && g_nxaccel->flip != NULL && !g_comp.game &&
+      comp_backfits() &&
       clock_systime_ticks() - g_comp.lastdrop >= NXCOMP_BUFAGAIN)
     {
       bufcells = (((g_comp.be->vinfo.xres + (1 << sh) - 1) >> sh) *
