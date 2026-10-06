@@ -64,11 +64,46 @@ static struct
   int maxchunks;                           /* The budget */
   int nchunks;                             /* Chunks taken */
   int nused;                               /* Slots in use */
+  bool off;                                /* No slots (nxbe_swap_enable()) */
   FAR uint32_t *chunk[NXSWAP_MAXCHUNKS];
   uint32_t used[NXSWAP_MAXCHUNKS];         /* A bit a slot */
 } g_swap;
 
 struct nxbe_swapstats_s g_nxbe_swap;
+
+/****************************************************************************
+ * Private Functions
+ ****************************************************************************/
+
+/* A chunk, out of the way of the large blocks a program (a game) may want
+ * later: the heap gives the smallest free block that fits, from its start,
+ * so the largest one (largest bytes, a node's size) is held meanwhile but
+ * for exactly the chunk's node at its end; the chunk then goes into a
+ * smaller free block if there is one, else at the largest one's end, and
+ * nothing is left beside it for small allocations to pin.  Given back, it
+ * joins the free block below it again.  (NXSWAP_NODE: the heap's node
+ * header and alignment, mm_heap's with CONFIG_MM_BACKTRACE_SEQNO; were it
+ * smaller, a few bytes more are the chunk's; larger, the chunk goes where
+ * the heap puts it.)
+ */
+
+#define NXSWAP_NODE 16
+
+static FAR uint32_t *swap_chunk(size_t size, size_t largest)
+{
+  FAR void *hold = NULL;
+  FAR uint32_t *chunk;
+  size_t node = (size + NXSWAP_NODE + 7) & ~(size_t)7;
+
+  if (largest > 2 * node)
+    {
+      hold = kumm_malloc(largest - node - NXSWAP_NODE);
+    }
+
+  chunk = kumm_malloc(size);
+  kumm_free(hold);
+  return chunk != NULL ? chunk : kumm_malloc(size);
+}
 
 /****************************************************************************
  * Public Functions
@@ -112,6 +147,11 @@ int nxbe_swap_alloc(void)
   int c;
   int k;
 
+  if (g_swap.off)
+    {
+      return -1;
+    }
+
   for (c = 0; c < g_swap.nchunks; c++)
     {
       if (g_swap.chunk[c] != NULL && ~g_swap.used[c] != 0)
@@ -142,8 +182,8 @@ int nxbe_swap_alloc(void)
       return -1;
     }
 
-  g_swap.chunk[c] = kumm_malloc(g_swap.slotwords * sizeof(uint32_t) *
-                                NXSWAP_CHUNK);
+  g_swap.chunk[c] = swap_chunk(g_swap.slotwords * sizeof(uint32_t) *
+                               NXSWAP_CHUNK, (size_t)mi.mxordblk);
   if (g_swap.chunk[c] == NULL)
     {
       g_nxbe_swap.refused++;
@@ -187,6 +227,20 @@ FAR uint32_t *nxbe_swap_slot(int slot)
 {
   return g_swap.chunk[slot / NXSWAP_CHUNK] +
          (size_t)(slot % NXSWAP_CHUNK) * g_swap.slotwords;
+}
+
+/****************************************************************************
+ * Name: nxbe_swap_enable
+ *
+ * Description:
+ *   Off: no slots are given (the CPU's memory is a game's: the compositor
+ *   gives the slots it has back, nxbe_compose_pressure()); on again.
+ *
+ ****************************************************************************/
+
+void nxbe_swap_enable(bool on)
+{
+  g_swap.off = !on;
 }
 
 /****************************************************************************

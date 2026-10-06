@@ -195,6 +195,23 @@ struct nx_accel_s
   CODE int  (*readbulk)(FAR const struct nxgl_rect_s *rect,
                         FAR uint32_t *buf);
 
+  /* A game, optional (NULL): game() returns 2 while it has taken the
+   * display, 1 while it is starting (it wants the CPU's memory first), 0
+   * if there is none, and in *seq how often that has changed.  Starting,
+   * NX gives back and uses no memory for copies of windows' pixels (its
+   * swap).  With the display taken, NX composites nothing and its windows
+   * hold no memory at all: all of them are parked (no surfaces or cells,
+   * no copies in the swap, no second display buffer), and their clients
+   * draw them again when the display is given back.  NX calls
+   * gameready(seq) once it has done so for the change seq (the game may
+   * then have the memory).  notify() gives the driver the function that
+   * wakes NX's server to look (from any task).
+   */
+
+  CODE int  (*game)(FAR uint32_t *seq);
+  CODE void (*gameready)(uint32_t seq);
+  CODE void (*notify)(CODE void (*wake)(void));
+
   /* Per-pixel blending, optional (NULL): a colour or an image blended into
    * a rectangle with an alpha made of a global value, the image's own
    * alpha and a shape (a lookup table of distances from an inner

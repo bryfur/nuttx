@@ -2385,6 +2385,22 @@ bool nxbe_surface_open(FAR struct nxbe_window_s *wnd)
     }
 
   surf_link(wnd);
+#ifdef CONFIG_NX_COMPOSITOR
+  /* A game has the display: windows hold no memory until it is given
+   * back (nxbe_compose_pressure()); parked, drawn when seen
+   */
+
+  if (nxbe_compose_gaming() && !NXBE_ISLAYER(wnd))
+    {
+      wnd->parked     = true;
+      wnd->surfsize.w = wnd->bounds.pt2.x - wnd->bounds.pt1.x + 1;
+      wnd->surfsize.h = wnd->bounds.pt2.y - wnd->bounds.pt1.y + 1;
+      g_nxbe_counts.parks++;
+      nxbe_compose_changed();
+      return true;
+    }
+#endif
+
   return surf_open(wnd, true);
 }
 
@@ -3039,6 +3055,46 @@ bool nxbe_surface_park(FAR struct nxbe_window_s *wnd)
   g_nxbe_counts.parks++;
   nxbe_compose_changed();
   ginfo("Parked %p (%dx%d)\n", wnd, wnd->surfsize.w, wnd->surfsize.h);
+  return true;
+}
+
+/****************************************************************************
+ * Name: nxbe_surface_unswap
+ *
+ * Description:
+ *   A window's slots of the swap given back (the CPU's memory wanted by a
+ *   game): the copies of cells it has are dropped; false, and nothing
+ *   done, if a cell's pixels are only in the swap (the caller parks it).
+ *
+ ****************************************************************************/
+
+bool nxbe_surface_unswap(FAR struct nxbe_window_s *wnd)
+{
+  FAR struct nxbe_cells_s *c = wnd->cells;
+  int k;
+
+  if (c == NULL || c->nswap == 0)
+    {
+      return true;
+    }
+
+  for (k = 0; k < c->cw * c->ch; k++)
+    {
+      if ((c->flags[k] & NXBE_CELL_SWAP) != 0 && c->swap[k] >= 0 &&
+          c->map[k] == NX_CELL_NONE)
+        {
+          return false;
+        }
+    }
+
+  for (k = 0; k < c->cw * c->ch; k++)
+    {
+      if ((c->flags[k] & NXBE_CELL_SWAP) != 0 && c->swap[k] >= 0)
+        {
+          cell_unswap(c, k);
+        }
+    }
+
   return true;
 }
 

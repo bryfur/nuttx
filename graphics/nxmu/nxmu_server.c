@@ -71,6 +71,7 @@
 #ifdef CONFIG_NX_ACCEL
 #ifdef CONFIG_NX_COMPOSITOR
 static int g_idlewait = -1;             /* Ticks until nxbe_compose_idle() */
+static char g_mqname[NX_CLIENT_MXNAMELEN];   /* The server's queue (nxmu_wake()) */
 #endif
 
 static void nxmu_accel_idle(mqd_t mqd)
@@ -79,6 +80,10 @@ static void nxmu_accel_idle(mqd_t mqd)
   bool idle = mq_getattr(mqd, &attr) < 0 || attr.mq_curmsgs == 0;
 
 #ifdef CONFIG_NX_COMPOSITOR
+  /* The display taken by a game, room asked for (nx_accel_s pressure) */
+
+  nxbe_compose_pressure();
+
   /* Nothing more coming: windows not seen for a while give up their
    * surfaces
    */
@@ -422,6 +427,37 @@ static inline int nxmu_setup(FAR const char *mqname, FAR NX_DRIVERTYPE *dev,
  ****************************************************************************/
 
 /****************************************************************************
+ * Name: nxmu_wake
+ *
+ * Description:
+ *   Wake the server, from any task (the display hardware's driver: a game
+ *   taking the display, asking for room): a message that does nothing,
+ *   after which the server looks at what the hardware wants.
+ *
+ ****************************************************************************/
+
+#if defined(CONFIG_NX_ACCEL) && defined(CONFIG_NX_COMPOSITOR)
+static void nxmu_wake(void)
+{
+  struct nxsvrmsg_wake_s msg;
+  mqd_t mqd;
+
+  if (g_mqname[0] == '\0')
+    {
+      return;
+    }
+
+  mqd = nxmq_open(g_mqname, O_WRONLY | O_NONBLOCK);
+  if (mqd != (mqd_t)-1 && (int)mqd >= 0)
+    {
+      msg.msgid = NX_SVRMSG_WAKE;
+      nxmq_send(mqd, (FAR const char *)&msg, sizeof(msg), NX_SVRMSG_PRIO);
+      nxmq_close(mqd);
+    }
+}
+#endif
+
+/****************************************************************************
  * Name: nx_runinstance
  *
  * Description:
@@ -465,6 +501,18 @@ int nx_runinstance(FAR const char *mqname, FAR NX_DRIVERTYPE *dev)
       return ret;
     }
 
+#if defined(CONFIG_NX_ACCEL) && defined(CONFIG_NX_COMPOSITOR)
+  /* The display hardware's driver may wake the server (a game taking the
+   * display, asking for room)
+   */
+
+  if (mqname != NULL && g_nxaccel != NULL && g_nxaccel->notify != NULL)
+    {
+      strlcpy(g_mqname, mqname, sizeof(g_mqname));
+      g_nxaccel->notify(nxmu_wake);
+    }
+#endif
+
   /* Produce the initial, background display */
 
   nxbe_redraw(&nxmu.be, &nxmu.be.bkgd, &nxmu.be.bkgd.bounds);
@@ -507,10 +555,12 @@ int nx_runinstance(FAR const char *mqname, FAR NX_DRIVERTYPE *dev)
 
 #ifdef CONFIG_NX_ACCEL
       /* A display whose memory may be lost (nx_accel_s lost: another GPU
-       * ran): looked at once a second, however idle (nxmu_accel_idle())
+       * ran), or that a game may take (game): looked at once a second,
+       * however idle (nxmu_accel_idle())
        */
 
-      if (g_nxaccel != NULL && g_nxaccel->lost != NULL &&
+      if (g_nxaccel != NULL &&
+          (g_nxaccel->lost != NULL || g_nxaccel->game != NULL) &&
           (waitms < 0 || waitms > 1000))
         {
           waitms = 1000;
@@ -878,6 +928,9 @@ int nx_runinstance(FAR const char *mqname, FAR NX_DRIVERTYPE *dev)
                                                   modemsg->size);
               nxsem_post(modemsg->sem_done);
             }
+            break;
+
+          case NX_SVRMSG_WAKE: /* Nothing: look again (nxmu_accel_idle()) */
             break;
 
           case NX_SVRMSG_SURFACE: /* Where a window's pixels are */

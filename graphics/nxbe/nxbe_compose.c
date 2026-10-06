@@ -174,6 +174,8 @@ struct nxcomp_s
   bool needs;                             /* Windows' needs are old */
   clock_t lastdrop;                       /* The back buffer given up */
   FAR struct nxbe_window_s *target;       /* nx_gpuops() into it */
+  bool game;                              /* A game has the display */
+  uint32_t gameseq;                       /* ... its last ask for room met */
   clock_t lastpack;                       /* ... then */
   uint16_t nparked;                       /* Windows parked */
   int ndamage;
@@ -2964,6 +2966,15 @@ static void comp_need(FAR struct nxbe_window_s *wnd)
       c->flags[k] &= ~NXBE_CELL_NEED;
     }
 
+  /* A game has the display: nothing of any window is seen (all of them
+   * may go to the swap; hidden ones too, for the game's room)
+   */
+
+  if (g_comp.game)
+    {
+      return;
+    }
+
   if (NXBE_ISHIDDEN(wnd))
     {
       if ((wnd->fx.flags & NX_FX_PARK) == 0)
@@ -3437,7 +3448,7 @@ static void comp_swapidle(FAR int32_t *next)
         }
     }
 
-  if (!g_comp.dbuf && g_nxaccel->flip != NULL &&
+  if (!g_comp.dbuf && g_nxaccel->flip != NULL && !g_comp.game &&
       clock_systime_ticks() - g_comp.lastdrop >= NXCOMP_BUFAGAIN)
     {
       bufcells = (((g_comp.be->vinfo.xres + (1 << sh) - 1) >> sh) *
@@ -4215,7 +4226,8 @@ void nxbe_compose_gpuops(FAR struct nxbe_window_s *wnd,
 
 bool nxbe_compose_due(void)
 {
-  return g_comp.on && (g_comp.ndamage > 0 || g_comp.nmoves > 0) &&
+  return g_comp.on && !g_comp.game &&
+         (g_comp.ndamage > 0 || g_comp.nmoves > 0) &&
          clock_systime_ticks() - g_comp.since >= NXCOMP_LATENCY &&
          (!g_comp.hold ||
           (int32_t)(g_comp.holduntil - clock_systime_ticks()) <= 0);
@@ -4225,8 +4237,9 @@ int nxbe_compose_wait(void)
 {
   clock_t elapsed;
 
-  if (!g_comp.on || (g_comp.ndamage == 0 && g_comp.nmoves == 0 &&
-                     !(g_comp.retry && !g_comp.dbuf)))
+  if (!g_comp.on || g_comp.game ||
+      (g_comp.ndamage == 0 && g_comp.nmoves == 0 &&
+       !(g_comp.retry && !g_comp.dbuf)))
     {
       return -1;
     }
@@ -4267,7 +4280,7 @@ void nxbe_compose_run(void)
   int ncopy;
   int i;
 
-  if (!g_comp.on)
+  if (!g_comp.on || g_comp.game)
     {
       return;
     }
@@ -4344,6 +4357,136 @@ void nxbe_compose_run(void)
 
   g_comp.ndamage = 0;
   g_nxbe_counts.frames++;
+}
+
+/****************************************************************************
+ * Name: nxbe_compose_pressure
+ *
+ * Description:
+ *   Between messages: whether a game is starting or has taken the display
+ *   (nx_accel_s game).  Starting (1: it wants the CPU's memory first), the
+ *   swap is given back and kept empty: windows whose pixels are partly
+ *   there are parked (drawn again when seen), the copies of cells kept are
+ *   dropped.  With the display taken (2), nothing is composited and the
+ *   windows hold no memory at all, in the GPU or the CPU's: every window
+ *   is parked (its surface or cells, or its memory, given up; opened while
+ *   the game runs, it starts parked), the second display buffer, the
+ *   staging band and the smaller pictures go too.  Either way the driver
+ *   is told once it is done (gameready()), so that the game's first
+ *   allocations find the room.  Given back (0), the swap is used again
+ *   and the display composited: the windows that may not be parked
+ *   (NX_FX_PARK) are unparked at once, the others when they are seen, and
+ *   their clients draw them again.
+ *
+ ****************************************************************************/
+
+void nxbe_compose_pressure(void)
+{
+  FAR struct nxbe_window_s *wnd;
+  uint32_t seq = 0;
+  bool wasgame = g_comp.game;
+  int state;
+
+  if (!g_comp.on || g_nxaccel->game == NULL)
+    {
+      return;
+    }
+
+  state = g_nxaccel->game(&seq);
+  if (seq == g_comp.gameseq)
+    {
+      return;
+    }
+
+  g_comp.gameseq = seq;
+  g_comp.game    = state >= 2;
+  g_comp.needs   = true;
+  g_comp.changed = true;
+  nxbe_swap_enable(state == 0);
+  if (state >= 2)
+    {
+      comp_dropback();
+      comp_unstage();
+      for (wnd = nxbe_surface_list(); wnd != NULL; wnd = wnd->surfnext)
+        {
+          comp_mipfree(wnd);
+          wnd->miplevel = 0;
+          if (!NXBE_ISLAYER(wnd))
+            {
+              nxbe_srccache_free(wnd);
+              nxbe_surface_park(wnd);
+            }
+        }
+
+      g_comp.hold  = false;
+      g_comp.nheld = 0;
+      nxbe_srccache_trim();
+      nxbe_accel_flush();
+    }
+  else if (state == 1)
+    {
+      /* The swap emptied (and windows in memory out of it); the display
+       * goes on being composited.  A window that may not be parked gets a
+       * surface again at once, its client asked to draw it (hidden ones
+       * too: an atlas is drawn from)
+       */
+
+      for (wnd = nxbe_surface_list(); wnd != NULL; wnd = wnd->surfnext)
+        {
+          if (NXBE_ISLAYER(wnd) || wnd->parked ||
+              (wnd->surface && nxbe_surface_unswap(wnd)))
+            {
+              continue;
+            }
+
+          nxbe_srccache_free(wnd);
+          if (nxbe_surface_park(wnd) && (wnd->fx.flags & NX_FX_PARK) == 0)
+            {
+              nxbe_surface_unpark(wnd);
+            }
+        }
+    }
+
+  if (wasgame && !g_comp.game)
+    {
+      /* Windows that may not be parked get their surfaces back now, seen
+       * or not (hidden ones may be sources, an atlas: their clients draw
+       * them again on request); the others when they are seen
+       */
+
+      for (wnd = nxbe_surface_list(); wnd != NULL; wnd = wnd->surfnext)
+        {
+          if (wnd->parked && !NXBE_ISLAYER(wnd) &&
+              (wnd->fx.flags & NX_FX_PARK) == 0)
+            {
+              nxbe_surface_unpark(wnd);
+            }
+        }
+
+      g_comp.lastdrop = clock_systime_ticks() - NXCOMP_BUFAGAIN;
+      g_comp.retry    = true;
+      g_comp.nprev    = 0;
+      nxbe_compose_damage(&g_comp.be->bkgd.bounds);
+    }
+
+  if (g_nxaccel->gameready != NULL)
+    {
+      g_nxaccel->gameready(seq);
+    }
+}
+
+/****************************************************************************
+ * Name: nxbe_compose_gaming
+ *
+ * Description:
+ *   Whether a game has the display (nxbe_compose_pressure()): windows are
+ *   then opened parked.
+ *
+ ****************************************************************************/
+
+bool nxbe_compose_gaming(void)
+{
+  return g_comp.game;
 }
 
 /****************************************************************************

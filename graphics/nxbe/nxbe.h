@@ -474,6 +474,7 @@ void nxbe_surface_present(FAR struct nxbe_window_s *wnd,
 FAR struct nxbe_window_s *nxbe_surface_list(void);
 #ifdef CONFIG_NX_COMPOSITOR
 bool nxbe_surface_park(FAR struct nxbe_window_s *wnd);
+bool nxbe_surface_unswap(FAR struct nxbe_window_s *wnd);
 void nxbe_surface_unpark(FAR struct nxbe_window_s *wnd);
 int  nxbe_surface_frommemory(void);
 #endif
@@ -574,12 +575,20 @@ int  nxbe_swap_alloc(void);
 void nxbe_swap_free(int slot);
 FAR uint32_t *nxbe_swap_slot(int slot);
 void nxbe_swap_usage(FAR uint32_t *slots, FAR uint32_t *bytes);
+void nxbe_swap_enable(bool on);         /* Off: no slots (a game's memory) */
 
 /* Which cells windows need (NXBE_CELL_NEED), made again if anything that
  * decides it has changed (or all says so)
  */
 
 void nxbe_compose_needs(bool all);
+
+/* The display taken by a game (nx_accel_s pressure): looked at by the
+ * server between messages
+ */
+
+void nxbe_compose_pressure(void);
+bool nxbe_compose_gaming(void);
 void nxbe_compose_mipdirty(FAR struct nxbe_window_s *wnd,
                            FAR const struct nxgl_rect_s *rel);
 FAR struct nxbe_cells_s *nxbe_compose_mipcells(FAR struct nxbe_window_s *wnd);

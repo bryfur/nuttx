@@ -183,7 +183,9 @@ enum nxmsg_e
   NX_SVRMSG_SETLUT,           /* Load a shape table */
   NX_SVRMSG_DISPLAYMODE,      /* Get or set the display mode */
   NX_SVRMSG_KBDMODE,          /* Bytes or key events from the keyboard */
-  NX_SVRMSG_SURFACE           /* Where a window's pixels are */
+  NX_SVRMSG_SURFACE,          /* Where a window's pixels are */
+  NX_SVRMSG_WAKE              /* Nothing: the server looks again at what
+                               * the display hardware wants (nxmu_wake()) */
 };
 
 /* Server-to-Client Message Structures **************************************/
@@ -368,6 +370,13 @@ struct nxsvrmsg_requestbkgd_s
 struct nxsvrmsg_releasebkgd_s
 {
   uint32_t msgid;                  /* NX_SVRMSG_RELEASEBKGD */
+};
+
+/* The server woken (from any task: nxmu_wake()) */
+
+struct nxsvrmsg_wake_s
+{
+  uint32_t msgid;                  /* NX_SVRMSG_WAKE */
 };
 
 /* This message informs the server that the size
