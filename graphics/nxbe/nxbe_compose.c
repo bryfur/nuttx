@@ -22,45 +22,24 @@
 
 /* The compositor (CONFIG_NX_COMPOSITOR).
  *
- * Nothing is drawn on the display directly.  Whatever changes it (a window
- * drawn into, moved, raised, opened, closed, given effects) only records
- * the rectangle of the display that is now out of date: the damage.  When
- * the server has no more messages waiting (or damage has waited
- * NXCOMP_LATENCY), and at most once a frame (NXCOMP_FRAME), a frame is
- * composited into the back buffer and flipped to:
+ * Changes to the display only record damage.  When the server is idle (or
+ * damage has waited NXCOMP_LATENCY), at most once per NXCOMP_FRAME, a frame
+ * is composited into the back buffer and flipped to:
  *
- *   - the back buffer is brought up to date first: it is the frame before
- *     last, so what the last frame changed (its buffer age) is copied over
- *     from the front buffer, except where this frame redraws anyway;
- *   - a window that was moved and is opaque is copied as it was
- *     composited, from where it was in the front buffer to where it is in
- *     the back: one copy instead of drawing it and all that is below it
- *     again; only its round corners, what it uncovered and its shadow's
- *     margins become damage;
- *   - each damaged rectangle is composited from the lowest window that
- *     matters to the top one:
- *       - the background: its colour;
- *       - a window's shadow: black, blended with the shape table
- *         NX_LUT_SHADOW around the window's rounded rectangle (only where
- *         the window does not cover it);
- *       - its backdrop: a tint blended behind it (translucent panels);
- *       - its pixels: copied from its surface, the round corners (and the
- *         whole window, if it has an opacity or a colour key) blended with
- *         the shape table NX_LUT_CORNER;
- *       - or, for a layer window, its display list, replayed;
- *     the lowest window that matters is the top one that covers the
- *     rectangle with opaque pixels: typing in a terminal on top costs one
- *     copy from its surface (and one more of the last frame's change);
- *   - the back buffer is flipped to (nx_accel_s flip): the hardware shows
- *     it from the next frame, so no partial state is ever seen.
+ *   - the back buffer (the frame before last) is first brought up to date
+ *     with what the last frame changed, copied from the front buffer;
+ *   - an opaque window that moved is copied from its old place in the front
+ *     buffer; only its corners, what it uncovered and its shadow are damage;
+ *   - each damaged rectangle is drawn from the top window that covers it
+ *     opaquely upwards: background colour, shadows (NX_LUT_SHADOW),
+ *     backdrops, window pixels with round corners (NX_LUT_CORNER), layer
+ *     windows' display lists;
+ *   - the flip takes effect at the next frame, so no partial state shows.
  *
- * The two display buffers are the display at (0, 0) and a surface of the
- * current mode's size.  When a window's surface does not fit, the second
- * buffer is given up (nxbe_compose_reclaim()) and the display composited
- * in place, until there is room again.  Without flip() it is always so.
- *
- * Everything is the display hardware's operations (nx_accel_s): the
- * server only computes rectangles.
+ * The buffers are the display at (0, 0) and a surface of the mode's size.
+ * When a window's surface does not fit, the second buffer is given up
+ * (nxbe_compose_reclaim()) and the display is composited in place.
+ * All drawing is done by the hardware (nx_accel_s).
  */
 
 /****************************************************************************
@@ -810,9 +789,8 @@ static inline void comp_shadow(FAR struct nxbe_window_s *wnd,
   comp_shadow_at(wnd, &wnd->bounds, &wnd->bounds, r, off);
 }
 
-/* A small surface to blend the pixels of windows in memory from: their
- * round corners, opacity and colour key.  Made when first needed, as wide
- * as the widest display mode.
+/* A staging surface for blending windows held in memory, as wide as the
+ * widest display mode.  Made when first needed.
  */
 
 static bool comp_stage(void)
@@ -848,9 +826,8 @@ static void comp_unstage(void)
     }
 }
 
-/* Display rectangle r of a window in memory, blended as from a surface:
- * a staging band at a time, its pixels put there first (without a
- * staging surface, just the pixels)
+/* Blend display rectangle r of a window in memory, one staging band at a
+ * time (without a staging surface, just copy the pixels)
  */
 
 static void comp_memblend(FAR struct nxbe_window_s *wnd,
@@ -1017,9 +994,8 @@ static void comp_pixels(FAR struct nxbe_window_s *wnd,
     }
 }
 
-/* A window's 1-pixel light edge (dark with NX_FX_DARKEDGE) where it meets
- * display rectangle c: its outer rows and columns and its corner squares,
- * blended with the ring
+/* A window's 1-pixel light edge (dark with NX_FX_DARKEDGE), blended with
+ * the ring, where it meets display rectangle c
  */
 
 static void comp_border(FAR struct nxbe_window_s *wnd,
@@ -1066,8 +1042,8 @@ static void comp_border(FAR struct nxbe_window_s *wnd,
     }
 }
 
-/* One operation of a window's into dest (device coordinates), its image
- * source (if any) at spos; shape parameters are the window's moved to org
+/* One display-list operation into dest (device coordinates); the image
+ * source, if any, is at spos; shape parameters are relative to org
  */
 
 static void comp_gpuop_do(FAR const struct nx_gpuop_s *op,
@@ -1138,9 +1114,7 @@ static void comp_gpuop_do(FAR const struct nx_gpuop_s *op,
     }
 }
 
-/* An image source in memory (a window with no room for a surface): a
- * staging band at a time, its pixels put there first
- */
+/* An image source held in memory, one staging band at a time */
 
 static void comp_gpuop_mem(FAR struct nxbe_window_s *src,
                            FAR const struct nx_gpuop_s *op,
@@ -1198,8 +1172,8 @@ static void comp_gpuop_mem(FAR struct nxbe_window_s *src,
     }
 }
 
-/* One operation of a window's (window coordinates) at org on the device,
- * clipped to clip (device coordinates)
+/* One display-list operation (window coordinates) at org, clipped to clip
+ * (device coordinates)
  */
 
 static void comp_gpuop(FAR struct nxbe_window_s *wnd,
@@ -1246,7 +1220,7 @@ static void comp_gpuop(FAR struct nxbe_window_s *wnd,
       src = op->src != NULL ? (FAR struct nxbe_window_s *)op->src : wnd;
       if (!src->surface)
         {
-          /* In memory (or parked): a BC1 image is not drawn from there */
+          /* In memory or parked: BC1 images can't be drawn from there */
 
           if ((op->mode & NX_BLEND_EXT) == 0)
             {
@@ -1256,9 +1230,7 @@ static void comp_gpuop(FAR struct nxbe_window_s *wnd,
           return;
         }
 
-      /* A BC1 image's pixels are in the hardware's memory seen four times
-       * as tall
-       */
+      /* BC1 pixels are addressed at four times the height */
 
       if ((op->mode & NX_BLEND_EXT) != 0)
         {
@@ -2268,8 +2240,8 @@ static int rect_cut(FAR const struct nxgl_rect_s *p,
               return -1;
             }
 
-          /* The first part takes the piece's place, the rest go last (and
-           * are cut by this rectangle no more: they miss it)
+          /* The first part replaces the piece, the rest are appended (they
+           * miss this cut rectangle)
            */
 
           piece[j] = part[0];
@@ -2295,7 +2267,7 @@ static inline int comp_back(void)
   return g_comp.dbuf ? g_comp.front ^ 1 : g_comp.front;
 }
 
-/* Copy display rectangle r from the front buffer to the back one */
+/* Copy display rectangle src of the front buffer to dest in the back */
 
 static void comp_bufcopy(FAR const struct nxgl_rect_s *src,
                          FAR const struct nxgl_rect_s *dest)
@@ -2346,10 +2318,9 @@ static void comp_flip(int buf)
   g_comp.lastflip = clock_systime_ticks();
 }
 
-/* A second display buffer: a surface of the display's size, if there is
- * room (the surfaces packed together for it if they have not been lately,
- * or pack is set: a display mode moved them).  It holds nothing yet: all
- * of the display is the last frame's change to it.
+/* Get a second display buffer if there is room, compacting the surfaces
+ * for it unless done recently (pack forces it).  The new buffer is empty:
+ * all of the display counts as the last frame's change.
  */
 
 static void comp_getback(bool pack)
@@ -2432,7 +2403,7 @@ static FAR struct nxcomp_move_s *move_find(FAR struct nxbe_window_s *wnd)
   return NULL;
 }
 
-/* The window will not be copied from where it was: that is out of date */
+/* Forget a window's move: it is redrawn instead of copied */
 
 static void move_drop(FAR struct nxbe_window_s *wnd)
 {
@@ -2464,8 +2435,8 @@ static bool move_copyable(FAR struct nxcomp_move_s *m, int ncopy)
          (g_comp.dbuf || ncopy == 0);  /* One buffer: one copy in place */
 }
 
-/* A moved window, copied: what to copy, and the damage around it (add[]).
- * False if add[] has no room.
+/* Plan copying a moved window: the copy, and the damage around it in
+ * add[].  False if add[] is full.
  */
 
 static bool move_plan(FAR struct nxcomp_move_s *m,
@@ -2488,18 +2459,14 @@ static bool move_plan(FAR struct nxcomp_move_s *m,
   int n;
   int i;
 
-  /* What is copied: the old pixels that were on the display, to where
-   * they land on it
-   */
+  /* The old pixels that were on the display, to where they land on it */
 
   nxgl_rectintersect(&copy->src, from, disp);
   nxgl_rectoffset(&copy->dest, &copy->src, dx, dy);
   nxgl_rectintersect(&copy->dest, &copy->dest, disp);
   nxgl_rectoffset(&copy->src, &copy->dest, -dx, -dy);
 
-  /* What it uncovered and its shadow, old and new: all it touches, then
-   * and now, but for where it is
-   */
+  /* What it uncovered and its shadows: both extents minus where it is */
 
   wnd_extent_at(wnd, from, &u);
   wnd_extent_at(wnd, to, &e);
@@ -2510,7 +2477,7 @@ static bool move_plan(FAR struct nxcomp_move_s *m,
       ok &= list_add(add, nadd, max, &part[i]);
     }
 
-  /* Where it is, but what the copy did not bring (off the display) */
+  /* Where it is but the copy didn't reach (it was off the display) */
 
   if (rect_empty(&copy->dest))
     {
@@ -2543,9 +2510,7 @@ static bool move_plan(FAR struct nxcomp_move_s *m,
       ok &= list_add(add, nadd, max, &e);
     }
 
-  /* What was out of date where it was (its own drawing, what changed
-   * over it) is out of date where the copy takes it
-   */
+  /* Damage on its old place moves with it */
 
   for (i = 0; i < g_comp.ndamage; i++)
     {
@@ -2554,8 +2519,8 @@ static bool move_plan(FAR struct nxcomp_move_s *m,
       ok &= list_add(add, nadd, max, &x);
     }
 
-  /* Windows above it: they were over the pixels copied (where they were
-   * then, if they moved too), and are over where it is now
+  /* Windows above it: over the copied pixels (at their old place if they
+   * moved too) and over where it is now
    */
 
   for (above = wnd->above; above != NULL; above = above->above)
@@ -2580,9 +2545,7 @@ static bool move_plan(FAR struct nxcomp_move_s *m,
   return ok;
 }
 
-/* The moves of this frame: copies where the windows can be copied, and
- * damage for the rest
- */
+/* This frame's moves: copies where possible, damage for the rest */
 
 static int comp_moves(FAR struct nxcomp_copy_s *copy)
 {
@@ -2632,9 +2595,8 @@ static int comp_moves(FAR struct nxcomp_copy_s *copy)
 
 /* Parking ******************************************************************/
 
-/* Whether any of a window is seen: it is not hidden, some of it is on the
- * display, and not all of that is covered by the opaque windows above it
- * (their round corners do not cover)
+/* Whether any of a window is visible: not hidden, partly on the display
+ * and not covered by opaque windows above (round corners don't cover)
  */
 
 static bool comp_seen(FAR struct nxbe_window_s *wnd)
