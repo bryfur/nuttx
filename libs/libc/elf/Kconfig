@@ -80,6 +80,19 @@ config LIBC_ELF_SYMBOL_CACHECOUNT
 		This is an cache that is used to store elf symbol table to
 		reduce access fs. Default: 256
 
+config LIBC_ELF_PRELOAD_SYMTAB
+	bool "Read the symbol and string tables whole"
+	default n
+	---help---
+		Read a module's symbol table and its string table into memory
+		with one read each while it is bound (and free them after),
+		rather than each symbol and each name on its own as the
+		relocations come to them.  A module of a few thousand symbols
+		then loads in a fraction of the time from a file system where
+		every small read costs a block read (an SD card), for the
+		tables' size in memory while it loads.  When the memory is
+		not there, the symbols are read one by one (the cache above).
+
 if LIBC_ELF_HAVE_SYMTAB
 
 config LIBC_ELF_SYMTAB_ARRAY

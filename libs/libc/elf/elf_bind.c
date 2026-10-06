@@ -197,6 +197,58 @@ static inline int libelf_readrelas(FAR struct mod_loadinfo_s *loadinfo,
  *
  ****************************************************************************/
 
+#ifdef CONFIG_LIBC_ELF_PRELOAD_SYMTAB
+/****************************************************************************
+ * Name: libelf_presym
+ *
+ * Description:
+ *   A symbol from the symbol table read whole (libelf_preload(),
+ *   CONFIG_LIBC_ELF_PRELOAD_SYMTAB): its value is worked out the first
+ *   time a relocation needs it, then kept in the table.
+ *
+ ****************************************************************************/
+
+static FAR Elf_Sym *libelf_presym(FAR struct module_s *modp,
+                                  FAR struct mod_loadinfo_s *loadinfo,
+                                  int symidx,
+                                  FAR const struct symtab_s *exports,
+                                  int nexports, FAR int *ret)
+{
+  FAR Elf_Shdr *symsec = &loadinfo->shdr[loadinfo->symtabidx];
+  FAR Elf_Sym *sym;
+
+  if (symidx < 0 || symidx >= symsec->sh_size / sizeof(Elf_Sym))
+    {
+      berr("ERROR: Bad relocation symbol index: %d\n", symidx);
+      *ret = -EINVAL;
+      return NULL;
+    }
+
+  sym = &loadinfo->symmem[symidx];
+  if (!loadinfo->symdone[symidx])
+    {
+      *ret = libelf_symvalue(modp, loadinfo, sym,
+                             loadinfo->shdr[loadinfo->strtabidx].sh_offset,
+                             exports, nexports);
+      if (*ret == -ESRCH)
+        {
+          berr("ERROR: Undefined symbol[%d] has no name\n", symidx);
+        }
+      else if (*ret < 0)
+        {
+          berr("ERROR: Failed to get value of symbol[%d]: %d\n",
+               symidx, *ret);
+          return NULL;
+        }
+
+      loadinfo->symdone[symidx] = 1;
+    }
+
+  *ret = OK;
+  return sym;
+}
+#endif
+
 static int libelf_relocate(FAR struct module_s *modp,
                            FAR struct mod_loadinfo_s *loadinfo, int relidx,
                            FAR const struct symtab_s *exports, int nexports)
@@ -262,6 +314,18 @@ static int libelf_relocate(FAR struct module_s *modp,
       /* First try the cache */
 
       sym = NULL;
+#ifdef CONFIG_LIBC_ELF_PRELOAD_SYMTAB
+      if (loadinfo->symmem != NULL)
+        {
+          sym = libelf_presym(modp, loadinfo, symidx, exports, nexports,
+                              &ret);
+          if (sym == NULL)
+            {
+              break;
+            }
+        }
+
+#endif
       for (e = dq_peek(&q); e; e = dq_next(e))
         {
           cache = (FAR Elf_SymCache *)e;
@@ -513,6 +577,18 @@ static int libelf_relocateadd(FAR struct module_s *modp,
       /* First try the cache */
 
       sym = NULL;
+#ifdef CONFIG_LIBC_ELF_PRELOAD_SYMTAB
+      if (loadinfo->symmem != NULL)
+        {
+          sym = libelf_presym(modp, loadinfo, symidx, exports, nexports,
+                              &ret);
+          if (sym == NULL)
+            {
+              break;
+            }
+        }
+
+#endif
       for (e = dq_peek(&q); e; e = dq_next(e))
         {
           cache = (FAR Elf_SymCache *)e;
@@ -1098,6 +1174,10 @@ int libelf_bind(FAR struct module_s *modp,
       goto errout_with_addrenv;
     }
 
+#ifdef CONFIG_LIBC_ELF_PRELOAD_SYMTAB
+  libelf_preload(loadinfo);
+#endif
+
   /* Process relocations in every allocated section */
 
   for (i = 1; i < loadinfo->ehdr.e_shnum; i++)
@@ -1233,6 +1313,10 @@ int libelf_bind(FAR struct module_s *modp,
 #endif
 
 errout_with_addrenv:
+
+#ifdef CONFIG_LIBC_ELF_PRELOAD_SYMTAB
+  libelf_preload_free(loadinfo);
+#endif
 
 #ifdef CONFIG_ARCH_ADDRENV
   if (loadinfo->addrenv != NULL)

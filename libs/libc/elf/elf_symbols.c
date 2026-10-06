@@ -127,6 +127,32 @@ static int libelf_symname(FAR struct mod_loadinfo_s *loadinfo,
       return -ENOMEM;
     }
 
+#ifdef CONFIG_LIBC_ELF_PRELOAD_SYMTAB
+  /* The string table in memory: the name from there */
+
+  if (loadinfo->strmem != NULL &&
+      sh_offset == loadinfo->shdr[loadinfo->strtabidx].sh_offset &&
+      sym->st_name < loadinfo->shdr[loadinfo->strtabidx].sh_size)
+    {
+      FAR const char *name = loadinfo->strmem + sym->st_name;
+      size_t len = strnlen(name, loadinfo->shdr[loadinfo->strtabidx].sh_size -
+                                 sym->st_name);
+
+      while (loadinfo->buflen <= len)
+        {
+          ret = libelf_reallocbuffer(loadinfo, CONFIG_LIBC_ELF_BUFFERINCR);
+          if (ret < 0)
+            {
+              return ret;
+            }
+        }
+
+      memcpy(loadinfo->iobuffer, name, len);
+      loadinfo->iobuffer[len] = '\0';
+      return OK;
+    }
+#endif
+
   offset = sh_offset + sym->st_name;
 
   /* Loop until we get the entire symbol name into memory */
@@ -667,6 +693,57 @@ void libelf_freesymtab(FAR struct module_s *modp)
     }
 }
 
+#ifdef CONFIG_LIBC_ELF_PRELOAD_SYMTAB
+/****************************************************************************
+ * Name: libelf_preload, libelf_preload_free
+ *
+ * Description:
+ *   Read the symbol table and its string table whole
+ *   (CONFIG_LIBC_ELF_PRELOAD_SYMTAB), for the relocations and the lookups
+ *   by name that follow, rather than each symbol and each name with reads
+ *   of their own.  Without the memory, loadinfo->symmem stays NULL and
+ *   the symbols are read one by one.
+ *
+ ****************************************************************************/
+
+void libelf_preload_free(FAR struct mod_loadinfo_s *loadinfo)
+{
+  lib_free(loadinfo->symmem);
+  lib_free(loadinfo->symdone);
+  lib_free(loadinfo->strmem);
+  loadinfo->symmem = NULL;
+  loadinfo->symdone = NULL;
+  loadinfo->strmem = NULL;
+}
+
+void libelf_preload(FAR struct mod_loadinfo_s *loadinfo)
+{
+  FAR Elf_Shdr *symsec = &loadinfo->shdr[loadinfo->symtabidx];
+  FAR Elf_Shdr *strsec = &loadinfo->shdr[loadinfo->strtabidx];
+  size_t nsyms = symsec->sh_size / sizeof(Elf_Sym);
+
+  loadinfo->symmem = lib_malloc(symsec->sh_size);
+  loadinfo->symdone = lib_zalloc(nsyms > 0 ? nsyms : 1);
+  if (loadinfo->symmem == NULL || loadinfo->symdone == NULL ||
+      libelf_read(loadinfo, (FAR uint8_t *)loadinfo->symmem,
+                  symsec->sh_size, symsec->sh_offset) < 0)
+    {
+      libelf_preload_free(loadinfo);
+      return;
+    }
+
+  loadinfo->strmem = lib_malloc(strsec->sh_size);
+  if (loadinfo->strmem != NULL &&
+      libelf_read(loadinfo, (FAR uint8_t *)loadinfo->strmem,
+                  strsec->sh_size, strsec->sh_offset) < 0)
+    {
+      lib_free(loadinfo->strmem);
+      loadinfo->strmem = NULL;
+    }
+}
+
+#endif
+
 /****************************************************************************
  * Name: libelf_findsymbol
  *
@@ -706,9 +783,46 @@ int libelf_findsymbol(FAR struct mod_loadinfo_s *loadinfo,
         }
     }
 
+  num = loadinfo->shdr[loadinfo->symtabidx].sh_size / sizeof(Elf_Sym);
+
+#ifdef CONFIG_LIBC_ELF_PRELOAD_SYMTAB
+  /* The tables in memory (read for this lookup if they are not) */
+
+  if (loadinfo->symmem == NULL)
+    {
+      libelf_preload(loadinfo);
+      if (loadinfo->symmem != NULL && loadinfo->strmem != NULL)
+        {
+          ret = libelf_findsymbol(loadinfo, name, sym);
+          libelf_preload_free(loadinfo);
+          return ret;
+        }
+
+      libelf_preload_free(loadinfo);
+    }
+  else if (loadinfo->strmem != NULL)
+    {
+      size_t strsize = loadinfo->shdr[loadinfo->strtabidx].sh_size;
+
+      for (i = 0; i < num; i++)
+        {
+          FAR const Elf_Sym *s = &loadinfo->symmem[i];
+
+          if (s->st_name != 0 && s->st_name < strsize &&
+              strncmp(loadinfo->strmem + s->st_name, name,
+                      strsize - s->st_name) == 0)
+            {
+              *sym = *s;
+              return OK;
+            }
+        }
+
+      return -ENOENT;
+    }
+#endif
+
   /* Loop through all symbols in the symbol table */
 
-  num = loadinfo->shdr[loadinfo->symtabidx].sh_size / sizeof(Elf_Sym);
   for (i = 0; i < num; i++)
     {
       /* Read the symbol entry */

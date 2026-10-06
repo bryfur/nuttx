@@ -260,6 +260,11 @@ struct mod_loadinfo_s
   uint16_t      strtabidx;   /* String table section index */
   uint16_t      dsymtabidx;  /* Dynamic symbol table section index */
   uint16_t      buflen;      /* size of iobuffer[] */
+#ifdef CONFIG_LIBC_ELF_PRELOAD_SYMTAB
+  FAR Elf_Sym  *symmem;      /* The symbol table, read whole (or NULL) */
+  FAR uint8_t  *symdone;     /* Its entries whose st_value is final */
+  FAR char     *strmem;      /* The string table, read whole (or NULL) */
+#endif
   int           filfd;       /* Descriptor for the file being loaded */
   int           nexports;    /* ET_DYN - Number of symbols exported */
   uintptr_t     xipbase;     /* if elf is position independent, and use

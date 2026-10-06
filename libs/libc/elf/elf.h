@@ -63,6 +63,20 @@ int libelf_verifyheader(FAR const Elf_Ehdr *header);
 
 int libelf_findsymtab(FAR struct mod_loadinfo_s *loadinfo);
 
+#ifdef CONFIG_LIBC_ELF_PRELOAD_SYMTAB
+/****************************************************************************
+ * Name: libelf_preload, libelf_preload_free
+ *
+ * Description:
+ *   The symbol and string tables read whole (loadinfo->symmem, ->strmem:
+ *   NULL if there was not the memory), and freed.
+ *
+ ****************************************************************************/
+
+void libelf_preload(FAR struct mod_loadinfo_s *loadinfo);
+void libelf_preload_free(FAR struct mod_loadinfo_s *loadinfo);
+#endif
+
 /****************************************************************************
  * Name: libelf_readsym
  *
