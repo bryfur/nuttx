@@ -58,6 +58,10 @@ ifeq ($(CONFIG_RP23XX_SPI),y)
 CHIP_CSRCS += rp23xx_spi.c
 endif
 
+ifeq ($(CONFIG_RP23XX_SDIO),y)
+CHIP_CSRCS += rp23xx_sdio.c
+endif
+
 ifeq ($(CONFIG_RP23XX_PWM),y)
 CHIP_CSRCS += rp23xx_pwm.c
 endif

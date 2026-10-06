@@ -397,8 +397,10 @@ int rp23xx_common_bringup(void)
 #  endif
 #endif
 
-#ifdef CONFIG_RP23XX_SPISD
-  /* Mount the SPI-based MMC/SD block driver */
+#if defined(CONFIG_RP23XX_SPISD) && !defined(CONFIG_RP23XX_SDIO)
+  /* Mount the SPI-based MMC/SD block driver.  With the SDIO host as well,
+   * the board chooses (SPI as the fallback for a card in SPI mode).
+   */
 
   ret = board_spisd_initialize(0, CONFIG_RP23XX_SPISD_SPI_CH);
   if (ret < 0)

@@ -802,6 +802,68 @@ config RP23XX_I2S_PIO_SM
 endif # RP23XX_I2S
 
 #####################################################################
+#  SDIO Configuration
+#####################################################################
+
+config RP23XX_SDIO
+	bool "SD card on a PIO SDIO host (4-bit SD bus)"
+	default n
+	depends on MMCSD
+	select ARCH_HAVE_SDIO
+	select ARCH_HAVE_SDIO_PREFLIGHT
+	select ARCH_HAVE_SDIOWAIT_WRCOMPLETE
+	select MMCSD_SDIO
+	select SDIO_DMA
+	select SDIO_BLOCKSETUP
+	select RP23XX_DMAC
+	---help---
+		An SD host for the 4-bit SD bus built from one PIO block (three
+		of its state machines, all 32 instructions) and three DMA
+		channels (rp23xx_sdio.c), for drivers/mmcsd/mmcsd_sdio.c:
+		25 MHz default speed, 50 MHz high speed at a 300 MHz system
+		clock, the sampling points tuned to the card and the board.
+		The board calls rp23xx_sdio_initialize() and
+		mmcsd_slotinitialize().  Set CONFIG_MMCSD_MULTIBLOCK_LIMIT to
+		at most RP23XX_SDIO_MAXBLOCKS.
+
+if RP23XX_SDIO
+
+config RP23XX_SDIO_PIO
+	int "PIO block"
+	default 2
+	range 0 2
+
+config RP23XX_SDIO_CLK_GPIO
+	int "CLK pin"
+	default 30
+
+config RP23XX_SDIO_CMD_GPIO
+	int "CMD pin"
+	default 31
+
+config RP23XX_SDIO_D0_GPIO
+	int "DAT0 pin (DAT1-DAT3 follow it)"
+	default 40
+
+config RP23XX_SDIO_MAXBLOCKS
+	int "Most blocks in one transfer"
+	default 64
+	range 1 1024
+	---help---
+		Sizes the DMA control block and CRC tables (36 bytes a block).
+
+config RP23XX_SDIO_HIGHSPEED
+	bool "High speed (50 MHz)"
+	default y
+	---help---
+		Offer high speed to the MMC/SD driver, which switches a card
+		that can (CMD6) and then sets the 50 MHz clock (the system
+		clock divided by 6, rounded down to a whole divider).  The host
+		falls back to 25 MHz if no sampling point works there.
+
+endif # RP23XX_SDIO
+
+#####################################################################
 #  SPISD Configuration
 #####################################################################
 
