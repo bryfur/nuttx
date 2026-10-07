@@ -238,6 +238,10 @@ static int interrupt_handler(int irq, void *context, void *arg)
   const struct adc_callback_s *a_callback;
   int32_t                      value;
   bool                         error_bit_set;
+  uint8_t                      ch;
+#ifdef CONFIG_RP23XX_ADC_SWTRIG
+  bool                         last;
+#endif
 
   if (g_active_count == 0)
     {
@@ -247,8 +251,11 @@ static int interrupt_handler(int irq, void *context, void *arg)
       return OK;
     }
 
-  /* Fetch the data from the FIFO register */
+  /* Fetch the data from the FIFO register (and the channel it is from: a
+   * trigger may start the next round before the value is delivered)
+   */
 
+  ch            = g_current_channel;
   value         = getreg32(RP23XX_ADC_FIFO);
   error_bit_set = (value & RP23XX_ADC_FIFO_ERR) != 0;
 
@@ -261,6 +268,24 @@ static int interrupt_handler(int irq, void *context, void *arg)
       value = -value;
     }
 
+#ifdef CONFIG_RP23XX_ADC_SWTRIG
+  /* The round ends with the last channel needed: the ADC stays enabled
+   * (and the temperature sensor biased) until the next trigger.  Idle
+   * before the value goes up: a reader woken on the other core may
+   * trigger the next round at once, and a trigger that still saw the
+   * round under way would start nothing (the reader then waits forever).
+   */
+
+  last = !adc_more();
+  if (last)
+    {
+      putreg32(0, RP23XX_ADC_INTE);
+      UP_DMB();
+      g_idle = true;
+      UP_DMB();
+    }
+#endif
+
   for (a_device = g_first_device;
        a_device != NULL;
        a_device = PRIV(a_device)->next_device)
@@ -269,11 +294,9 @@ static int interrupt_handler(int irq, void *context, void *arg)
 
       if (a_callback != NULL  &&  a_callback->au_receive != NULL)
         {
-          if (PRIV(a_device)->has_channel[g_current_channel])
+          if (PRIV(a_device)->has_channel[ch])
             {
-              if (a_callback->au_receive(a_device,
-                                         g_current_channel,
-                                         value) != OK)
+              if (a_callback->au_receive(a_device, ch, value) != OK)
                 {
                   /* ### TODO ### Upper half buffer overflow */
                 }
@@ -282,14 +305,8 @@ static int interrupt_handler(int irq, void *context, void *arg)
     }
 
 #ifdef CONFIG_RP23XX_ADC_SWTRIG
-  /* The round ends with the last channel needed: the ADC stays enabled
-   * (and the temperature sensor biased) until the next trigger
-   */
-
-  if (!adc_more())
+  if (last)
     {
-      putreg32(0, RP23XX_ADC_INTE);
-      g_idle = true;
       return OK;
     }
 #endif

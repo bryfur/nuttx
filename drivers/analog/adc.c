@@ -298,10 +298,21 @@ static ssize_t adc_read(FAR struct file *filep, FAR char *buffer,
               goto return_with_irqdisabled;
             }
 
-          /* Wait for a message to be received */
+          /* Wait for a message to be received.  (FPC) The FIFO again once
+           * the waiter counts: adc_receive() on another CPU may have added
+           * to it since the check above and not posted (no waiter then);
+           * it looks at the waiters after the FIFO, so one of the two sees
+           * the other (a post with the data found too only leaves a count
+           * that the loop absorbs).
+           */
 
           dev->ad_nrxwaiters++;
-          ret = nxsem_wait(&fifo->af_sem);
+          SMP_MB();
+          if (fifo->af_head == fifo->af_tail)
+            {
+              ret = nxsem_wait(&fifo->af_sem);
+            }
+
           dev->ad_nrxwaiters--;
           if (ret < 0)
             {
@@ -590,9 +601,11 @@ static void adc_notify(FAR struct adc_dev_s *dev)
   poll_notify(dev->fds, CONFIG_ADC_NPOLLWAITERS, POLLIN);
 
   /* If there are threads waiting for read data, then signal one of them
-   * that the read data is available.
+   * that the read data is available (the FIFO's new tail before the look
+   * at the waiters: adc_read())
    */
 
+  SMP_MB();
   if (dev->ad_nrxwaiters > 0)
     {
       nxsem_post(&fifo->af_sem);
