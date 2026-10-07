@@ -27,9 +27,17 @@ config LIBC_ATOMIC_IRQ
 	---help---
 		atomic function by irq disable/enable
 
+config LIBC_ATOMIC_CHIP
+	bool
+	default n
+	---help---
+		(FPC) The chip's own atomic functions, inline from
+		<arch/rp23xx/atomic.h> (rp23xx: LDREX/STREX in the SRAM, a hardware
+		spinlock elsewhere)
+
 config LIBC_ATOMIC_TOOLCHAIN
 	bool
-	default y if !LIBC_ATOMIC_ARCH && !LIBC_ATOMIC_HWSPINLOCK && !LIBC_ATOMIC_IRQ
+	default y if !LIBC_ATOMIC_ARCH && !LIBC_ATOMIC_HWSPINLOCK && !LIBC_ATOMIC_IRQ && !LIBC_ATOMIC_CHIP
 	default n
 	---help---
 		atomic function from toolchain

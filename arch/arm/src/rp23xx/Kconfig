@@ -45,8 +45,9 @@ config RP23XX_PSRAM_HEAP_USER
 		kernel heap.  With SMP: exclusive accesses go to the global
 		exclusive monitor, which covers the SRAM only, so kernel spinlocks
 		(spinlock_t) must stay in the SRAM (kernel memory); atomic
-		operations, and so semaphores and mutexes anywhere, use a hardware
-		spinlock instead (LIBC_ATOMIC_HWSPINLOCK).  ARM_STACKS_KERNEL_HEAP
+		operations, and so semaphores and mutexes anywhere, look at the
+		address: LDREX/STREX in the SRAM, a hardware spinlock elsewhere
+		(LIBC_ATOMIC_CHIP, arch/rp23xx/atomic.h).  ARM_STACKS_KERNEL_HEAP
 		keeps the stacks in the SRAM too.
 
 config RP23XX_PSRAM_HEAP_SEPARATE

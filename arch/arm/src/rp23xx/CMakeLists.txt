@@ -44,6 +44,10 @@ if(CONFIG_LIBC_ATOMIC_HWSPINLOCK)
   list(APPEND SRCS rp23xx_hwspinlock.c)
 endif()
 
+if(CONFIG_LIBC_ATOMIC_CHIP)
+  list(APPEND SRCS rp23xx_atomic.c)
+endif()
+
 if(CONFIG_ARCH_HAVE_MULTICPU)
   list(APPEND SRCS rp23xx_cpuindex.c)
 endif()

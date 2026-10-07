@@ -81,8 +81,9 @@ extern int rp23xx_smp_bell_handler(int irq, void *c, void *arg);
  *   cores; without this each core checks only its own local monitor.  The
  *   global monitor covers the SRAM only: nothing may use exclusives on the
  *   PSRAM.  Kernel spinlocks live in kernel memory (the SRAM); atomic
- *   operations use a hardware spinlock (rp23xx_hwspinlock.c), so they
- *   work on the PSRAM user heap too.
+ *   operations look at the address (arch/chip/atomic.h): exclusives in the
+ *   SRAM, a hardware spinlock elsewhere, so they work on the PSRAM user
+ *   heap too.
  *   Called by each core as it starts.
  *
  ****************************************************************************/

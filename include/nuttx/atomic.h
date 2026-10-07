@@ -175,7 +175,16 @@ extern "C"
 #define EXTERN extern
 #endif
 
-#ifndef CONFIG_LIBC_ATOMIC_TOOLCHAIN
+#if defined(CONFIG_LIBC_ATOMIC_CHIP) && !defined(__XCC)
+/* The chip's own, inline (xcc, the board's compiler, takes the functions
+ * below instead).  Through the arch link, not arch/chip: the first
+ * generated sources (libs/libnx) are made before the chip link exists.
+ */
+
+#  if defined(CONFIG_ARCH_CHIP_RP23XX)
+#    include <arch/rp23xx/atomic.h>
+#  endif
+#elif !defined(CONFIG_LIBC_ATOMIC_TOOLCHAIN)
 void atomic_store_4(FAR volatile void *ptr, int32_t value, int memorder);
 void atomic_store_8(FAR volatile void *ptr, int64_t value, int memorder);
 int32_t atomic_load_4(FAR const volatile void *ptr, int memorder);
