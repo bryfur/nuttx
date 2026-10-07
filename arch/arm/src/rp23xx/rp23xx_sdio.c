@@ -294,6 +294,7 @@ struct rp23xx_sdio_s
   uint16_t nominal;               /* Divider mmcsd asked for */
   bool     widebus;
   bool     tuned;                 /* Sampling points tuned for div */
+  bool     tuning;                /* (failures expected: not logged) */
   uint8_t  cmdvar;                /* Command sampling point (VAR_*) */
   uint8_t  rxk;                   /* Data in: ticks after the rising edge */
   uint8_t  txfall;                /* Data out: launch after the falling edge */
@@ -1141,6 +1142,12 @@ static int sdio_rx_check(struct rp23xx_sdio_s *priv)
           uint32_t lo;
 
           sdio_crc16x4((const uint32_t *)(src + i * bl), bl / 4, &hi, &lo);
+          if ((hi != __builtin_bswap32(g_rxcrc[2 * i]) ||
+               lo != __builtin_bswap32(g_rxcrc[2 * i + 1])) && priv->tuning)
+            {
+              return -EIO;
+            }
+
           if (hi != __builtin_bswap32(g_rxcrc[2 * i]) ||
               lo != __builtin_bswap32(g_rxcrc[2 * i + 1]))
             {
@@ -1510,6 +1517,7 @@ static int sdio_test_rx(struct rp23xx_sdio_s *priv, int n)
   priv->nblocks  = 1;
   priv->bounce   = true;
   priv->ring     = false;
+  priv->tuning   = true;
   priv->rxbuf    = buf;
   priv->nbytes   = 64;
   priv->dir      = DIR_RX;
@@ -1548,6 +1556,7 @@ static int sdio_test_rx(struct rp23xx_sdio_s *priv, int n)
   priv->nbytes   = savebytes;
   priv->dir      = savedir;
   priv->xfer     = XFER_IDLE;
+  priv->tuning   = false;
   nxsem_reset(&priv->waitsem, 0);
   return good;
 }
