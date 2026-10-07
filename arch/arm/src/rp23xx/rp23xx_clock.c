@@ -131,6 +131,25 @@ static_assert(FLASH_CLKDIV >= 1 && FLASH_03H_CLKDIV <= 7,
 #  define PADS_QSPI_SD_SCHMITT  (1 << 1)
 #  define PADS_CLR_ALIAS        0x3000
 #  define QMI_RCMD_PREFIX_03H   0x03
+#  define QMI_RCMD_PREFIX_EBH   0xeb
+
+/* The quad EBh format with an 8-bit command and an 8-bit quad suffix (the
+ * mode bits): what continuous read needs (BOARD_FLASH_XIP_MODE)
+ */
+
+#  define QMI_RFMT_EBH_MASK     ((1 << 12) |   /* PREFIX_LEN */ \
+                                 (3 << 14) |   /* SUFFIX_LEN */ \
+                                 (3 << 4) |    /* SUFFIX_WIDTH */ \
+                                 (3 << 0))     /* PREFIX_WIDTH */
+#  define QMI_RFMT_EBH          ((1 << 12) |   /* an 8-bit command */ \
+                                 (2 << 14) |   /* an 8-bit suffix */ \
+                                 (2 << 4))     /* the suffix quad */
+
+/* Uncached, non-allocating XIP alias: a read that always reaches the
+ * flash
+ */
+
+#  define XIP_NOCACHE_NOALLOC   0x14000000
 #endif
 
 /****************************************************************************
@@ -233,11 +252,39 @@ flash_timing(void)
 
   putreg32(timing, RP23XX_QMI_M0_TIMING);
 
+#ifdef BOARD_FLASH_XIP_MODE
+  /* Continuous read, the logic of the Pico SDK's RP2350 boot stage 2
+   * (src/rp2350/boot_stage2/boot2_w25q080.S, Copyright (c) 2019-2022
+   * Raspberry Pi (Trading) Ltd., SPDX-License-Identifier: BSD-3-Clause):
+   * the mode bits after the address tell the flash that the next read is
+   * EBh too; one read with them, then the QMI leaves out the 8-clock
+   * command byte on every cache miss (46 -> 38 SCK).  Only on the quad
+   * EBh read the bootrom found working.  Whatever else talks to the flash
+   * must leave the mode first: the bootrom's flash_exit_xip() does (at
+   * every reset, and before its erase and program functions, as
+   * tools/fpcswd.py's stub uses them).
+   */
+
+  if ((getreg32(RP23XX_QMI_M0_RCMD) & RP23XX_QMI_CMD_PREFIX_MASK) ==
+      QMI_RCMD_PREFIX_EBH &&
+      (getreg32(RP23XX_QMI_M0_RFMT) & QMI_RFMT_EBH_MASK) == QMI_RFMT_EBH)
+    {
+      uint32_t rfmt = getreg32(RP23XX_QMI_M0_RFMT);
+
+      putreg32(QMI_RCMD_PREFIX_EBH |
+               BOARD_FLASH_XIP_MODE << RP23XX_QMI_CMD_SUFFIX_SHIFT,
+               RP23XX_QMI_M0_RCMD);
+      (void)*(FAR volatile uint8_t *)XIP_NOCACHE_NOALLOC;
+      putreg32(rfmt & ~(1 << 12), RP23XX_QMI_M0_RFMT);  /* PREFIX_LEN 0 */
+    }
+#endif
+
   /* Read it back, so that the write has landed before the return fetches
    * from the flash again.
    */
 
   (void)getreg32(RP23XX_QMI_M0_TIMING);
+  (void)getreg32(RP23XX_QMI_M0_RFMT);
 }
 #endif
 
