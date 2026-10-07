@@ -40,6 +40,14 @@
  * When a window's surface does not fit, the second buffer is given up
  * (nxbe_compose_reclaim()) and the display is composited in place.
  * All drawing is done by the hardware (nx_accel_s).
+ *
+ * Composited in place (one buffer), a frame is drawn behind the beam when
+ * the hardware can wait for it (nx_accel_s waitline): the damage, top to
+ * bottom in bands of NXCOMP_RACEBAND lines, each band once the scanout
+ * has read its last line (and not gone half a frame past its first), so
+ * no band is drawn while it is being shown; windows that moved are drawn
+ * again from their surfaces (a COPY of the display onto itself cannot be
+ * cut into bands).  A large change spans frames band by band.
  */
 
 /****************************************************************************
@@ -102,6 +110,8 @@
                                             * pixel: at most this large */
 #define NXCOMP_SWAPSTEP   64               /* ... read back when idle, at
                                             * most, a time */
+#define NXCOMP_RACEBAND   64               /* Drawn behind the beam: a
+                                            * band's lines */
 
 /****************************************************************************
  * Private Types
@@ -160,6 +170,8 @@ struct nxcomp_s
   int ndamage;
   int nprev;
   int nmoves;
+  int race;                               /* Behind the beam: a band's
+                                           * lines (0: not) */
   struct nxgl_rect_s damage[NXCOMP_MAXDAMAGE];
   struct nxgl_rect_s prev[NXCOMP_MAXPREV];  /* The last frame's changes */
   struct nxcomp_move_s moves[NXCOMP_MAXMOVES];
@@ -3554,6 +3566,7 @@ void nxbe_compose_install(FAR struct nxbe_state_s *be)
 
   g_comp.on    = true;
   g_comp.needs = true;
+  g_comp.race  = NXCOMP_RACEBAND;
   if (g_nxaccel->cells_alloc != NULL)
     {
       nxbe_swap_init(g_nxaccel->cellshift);
@@ -4241,6 +4254,79 @@ int nxbe_compose_wait(void)
   return elapsed >= NXCOMP_FRAME ? 0 : (int)(NXCOMP_FRAME - elapsed);
 }
 
+/* A frame composited in place behind the beam (nx_accel_s waitline): the
+ * damage and the moved windows' new places, top to bottom in bands of
+ * g_comp.race lines; before a band's first rectangle the wait for the
+ * scanout to have read the band's last line and not gone half a frame past
+ * its first (a band then has at least about half a frame to be drawn
+ * before the scanout reads it again).  A rectangle is cut only between
+ * rows (a window in perspective keeps its rows whole: their texels are
+ * the same).  Each piece is composited from the windows' surfaces, as a
+ * whole frame would be, so the picture is the same as without bands.
+ */
+
+static void comp_race(FAR const struct nxcomp_copy_s *copy, int ncopy,
+                      FAR const struct nxgl_point_s *off)
+{
+  FAR struct nxbe_state_s *be = g_comp.be;
+  struct nxgl_rect_s all[NXCOMP_MAXPREV];
+  struct nxgl_rect_s piece;
+  nxgl_coord_t lines = be->vinfo.yres;
+  nxgl_coord_t band = g_comp.race;
+  nxgl_coord_t top = lines;
+  nxgl_coord_t bot = -1;
+  nxgl_coord_t t;
+  int n = 0;
+  int i;
+
+  for (i = 0; i < g_comp.ndamage; i++)
+    {
+      all[n++] = g_comp.damage[i];
+    }
+
+  for (i = 0; i < ncopy; i++)
+    {
+      all[n++] = copy[i].dest;
+    }
+
+  for (i = 0; i < n; i++)
+    {
+      top = MIN(top, all[i].pt1.y);
+      bot = MAX(bot, all[i].pt2.y);
+    }
+
+  top = MAX(top, 0);
+  bot = MIN(bot, lines - 1);
+  for (t = top - top % band; t <= bot; t += band)
+    {
+      nxgl_coord_t b = MIN(t + band - 1, lines - 1);
+      int m = t + lines / 2;
+      bool waited = false;
+
+      for (i = 0; i < n; i++)
+        {
+          if (all[i].pt2.y < t || all[i].pt1.y > b)
+            {
+              continue;
+            }
+
+          piece = all[i];
+          piece.pt1.y = MAX(piece.pt1.y, t);
+          piece.pt2.y = MIN(piece.pt2.y, b);
+          if (!waited)
+            {
+              g_nxaccel->waitline(b, m < lines ? m : -1);
+              g_nxbe_counts.bands++;
+              waited = true;
+            }
+
+          comp_rect(&piece, off, be->topwnd, NXCOMP_QUADSPLIT);
+        }
+    }
+
+  g_nxbe_counts.raced++;
+}
+
 static uint32_t comp_us(clock_t t0)
 {
   struct timespec ts;
@@ -4302,8 +4388,21 @@ void nxbe_compose_run(void)
     }
 
   /* The back buffer: the last frame's changes it lacks, then the moved
-   * windows from where they were, then the damage
+   * windows from where they were, then the damage.  In place (one
+   * buffer), behind the beam if the hardware can wait for it.
    */
+
+  off = g_comp.buf[comp_back()];
+  if (!g_comp.dbuf && g_comp.race > 0 && g_nxaccel->waitline != NULL &&
+      g_nxaccel->waitline(-1, 0) == 0)
+    {
+      t0 = perf_gettime();
+      comp_race(copy, ncopy, &off);
+      g_nxbe_counts.drawus += comp_us(t0);
+      g_comp.ndamage = 0;
+      g_nxbe_counts.frames++;
+      return;
+    }
 
   if (g_comp.dbuf)
     {
@@ -4315,7 +4414,6 @@ void nxbe_compose_run(void)
       comp_bufcopy(&copy[i].src, &copy[i].dest);
     }
 
-  off = g_comp.buf[comp_back()];
   t0  = perf_gettime();
   for (i = 0; i < g_comp.ndamage; i++)
     {
@@ -4707,6 +4805,20 @@ size_t nxbe_compose_windows(FAR char *buf, size_t size)
 }
 
 /****************************************************************************
+ * Name: nxbe_compose_race
+ *
+ * Description:
+ *   Single buffered frames behind the beam in bands of so many lines (0:
+ *   not; < 0: NXCOMP_RACEBAND).  deskctl race.
+ *
+ ****************************************************************************/
+
+void nxbe_compose_race(int lines)
+{
+  g_comp.race = lines < 0 ? NXCOMP_RACEBAND : MIN(lines, 1024);
+}
+
+/****************************************************************************
  * Name: nxbe_compose_stats
  ****************************************************************************/
 
@@ -4734,6 +4846,10 @@ void nxbe_compose_stats(FAR struct nx_compose_stats_s *st)
   st->prepms      = (uint32_t)(g_nxbe_counts.prepus / 1000);
   st->drawms      = (uint32_t)(g_nxbe_counts.drawus / 1000);
   st->holdms      = TICK2MSEC(g_nxbe_counts.holdticks);
+  st->raced       = g_nxbe_counts.raced;
+  st->bands       = g_nxbe_counts.bands;
+  st->race        = g_comp.race;
+  st->dbuf        = g_comp.dbuf;          /* (now, not as last snapped) */
   nxbe_swap_usage(&st->swapcells, &st->swapbytes);
 }
 

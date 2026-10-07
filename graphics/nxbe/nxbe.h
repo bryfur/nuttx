@@ -613,6 +613,8 @@ struct nxbe_counts_s
   uint32_t holdticks;                 /* ... and how long */
   uint64_t prepus;                    /* Frames: making ready (residency) */
   uint64_t drawus;                    /* ... drawing (sending the GPU's) */
+  uint32_t raced;                     /* Frames drawn behind the beam */
+  uint32_t bands;                     /* ... in so many bands */
 };
 
 EXTERN struct nxbe_counts_s g_nxbe_counts;

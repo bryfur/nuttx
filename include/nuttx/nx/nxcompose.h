@@ -211,6 +211,10 @@ struct nx_compose_stats_s
   uint32_t holdms;               /* ... how long in all */
   uint32_t prepms;               /* Frames: making ready (residency) */
   uint32_t drawms;               /* ... drawing */
+  uint32_t raced;                /* Frames drawn behind the beam (single
+                                  * buffered: nx_accel_s waitline) */
+  uint32_t bands;                /* ... the bands they were drawn in */
+  int16_t  race;                 /* The bands' height (0: not racing) */
 };
 
 /****************************************************************************
@@ -335,6 +339,8 @@ int nx_setlut(FAR void *handle, int slot,
  ****************************************************************************/
 
 void nxbe_compose_stats(FAR struct nx_compose_stats_s *st);
+void nxbe_compose_race(int lines);  /* Bands' height, 0: off, < 0: the
+                                     * default */
 size_t nxbe_compose_windows(FAR char *buf, size_t size);
 
 #undef EXTERN

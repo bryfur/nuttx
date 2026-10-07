@@ -258,6 +258,18 @@ struct nx_accel_s
 
   CODE void (*flip)(FAR const struct nxgl_point_s *origin);
 
+  /* Drawing behind the beam, optional (NULL): the operations after it wait
+   * until the scanout has read line n of the display (its rows from the
+   * scanout origin) in the frame being shown, and not yet line m (m > n;
+   * m < 0: or the whole frame has been read, vertical blanking); a frame
+   * read past m already waits for the next one's line n.  A single
+   * buffered display redrawn in bands, each after its wait, does not
+   * tear.  Returns 0, or -ENOSYS when the hardware cannot (then nothing
+   * waits); n < 0 only asks.
+   */
+
+  CODE int  (*waitline)(int n, int m);
+
   /* An image in perspective, optional (NULL): the w x h rectangle at src
    * (a surface) drawn as any convex quadrilateral, its corners (top-left,
    * top-right, bottom-right, bottom-left) at (x[k], y[k]) in 1/16 pixels,
