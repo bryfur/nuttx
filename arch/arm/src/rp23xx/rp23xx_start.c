@@ -112,7 +112,11 @@ void __start(void)
 
   __asm__ __volatile__ ("\tmsr msp, %0\n" :: "r" (g_idle_topstack));
 
-  if (this_cpu() != 0)
+  /* The CPU's number straight from the SIO: up_cpu_index() may be in the
+   * RAM (the board's linker script), not there before .data is copied
+   */
+
+  if (getreg32(RP23XX_SIO_CPUID) != 0)
     {
       while (1)
         {
