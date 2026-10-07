@@ -96,6 +96,24 @@ ARCH_LIBCFUN(memset):
 #endif /* __ARM_FEATURE_PAC_DEFAULT */
 	bx	r3
 #else
+	/* Under 16 bytes a byte at a time, without the stack: the general
+	 * path below costs some 50 cycles whatever the length (fpc)
+	 */
+
+	cmp	r2, #16
+	bhs	.Lmemset_big
+	mov	r3, r0
+	cbz	r2, 2f
+1:
+	subs	r2, r2, #1
+	strb	r1, [r3], #1
+	bne	1b
+2:
+#if __ARM_FEATURE_PAC_DEFAULT
+	aut	ip, lr, sp
+#endif /* __ARM_FEATURE_PAC_DEFAULT */
+	bx	lr
+.Lmemset_big:
 	stmfd	sp!, {r0, r4-r7, lr}
 	rsb	r3, r0, #0
 	ands	r3, r3, #3
