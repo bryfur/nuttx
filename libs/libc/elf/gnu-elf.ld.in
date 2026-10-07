@@ -109,6 +109,11 @@ SECTIONS
 
   .init_array :
     {
+      /* An orphan section before this one (a module's .sram.*) may end
+       * unaligned: align first, so an empty array has _sinit == _einit.
+       */
+
+      . = ALIGN(SECTIONS_ALIGN);
       _sinit = .;
       _sctors = .;
       KEEP(*(SORT_BY_INIT_PRIORITY(.init_array.*) SORT_BY_INIT_PRIORITY(.ctors.*)))
@@ -120,6 +125,7 @@ SECTIONS
 
   .fini_array :
     {
+      . = ALIGN(SECTIONS_ALIGN);
       _sfini = .;
       _sdtors = .;
       KEEP (*(.dtors))
