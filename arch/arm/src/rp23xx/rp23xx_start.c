@@ -39,6 +39,7 @@
 #include "rp23xx_clock.h"
 #include "rp23xx_uart.h"
 #include "hardware/rp23xx_sio.h"
+#include "rp23xx_dcp.h"
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -169,6 +170,12 @@ void __start(void)
   /* Initialize the FPU */
 
   arm_fpuconfig();
+
+#ifdef CONFIG_RP23XX_DCP
+  /* The double-precision coprocessor (rp23xx_dcp.S) */
+
+  rp23xx_dcp_enable();
+#endif
 
   /* Configure the uart so that we can get debug output as soon as possible */
 

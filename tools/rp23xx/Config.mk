@@ -24,6 +24,15 @@
 # and assembly source files and to insert the resulting object files into an
 # archive.  These replace the default definitions at tools/Config.mk
 
+# MODULE_RTSRC, MODULE_RTAFLAGS -- run-time helpers that each loadable
+# module links before libgcc (apps/Application.mk): the double-precision
+# helpers on the coprocessor
+
+ifeq ($(CONFIG_RP23XX_DCP),y)
+  MODULE_RTSRC = $(TOPDIR)$(DELIM)arch$(DELIM)arm$(DELIM)src$(DELIM)rp23xx$(DELIM)rp23xx_dcp.S
+  MODULE_RTAFLAGS = -DRP23XX_DCP_MODULE
+endif
+
 # POSTBUILD -- Perform post build operations
 
 PICOTOOL_FOUND := $(shell command -v picotool 2> /dev/null)

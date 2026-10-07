@@ -44,6 +44,7 @@
 #include "hardware/rp23xx_sio.h"
 #include "hardware/rp23xx_psm.h"
 #include "hardware/rp23xx_m33.h"
+#include "rp23xx_dcp.h"
 
 #ifdef CONFIG_SMP
 
@@ -168,6 +169,9 @@ static void core1_boot(void)
 
   rp23xx_exclusives_global();
   arm_fpuconfig();
+#ifdef CONFIG_RP23XX_DCP
+  rp23xx_dcp_enable();
+#endif
 
   fifo_drain();
 
