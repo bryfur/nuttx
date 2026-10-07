@@ -323,6 +323,8 @@ struct rp23xx_sdio_s
   bool     bounce;                /* through g_bounce */
   bool     ring;                  /* through g_ring, the CPU copying */
   bool     stalled;               /* data in lost words (its FIFO full) */
+  size_t   winskip;               /* receives keep only these bytes ... */
+  size_t   winlen;                /* ... (window(); 0: all of them) */
   uint8_t  attempt;
   uint8_t *rxbuf;
   const uint8_t *txbuf;
@@ -405,6 +407,8 @@ static int  rp23xx_dmarecvsetup(struct sdio_dev_s *dev, uint8_t *buffer,
 static int  rp23xx_dmasendsetup(struct sdio_dev_s *dev,
                                 const uint8_t *buffer, size_t buflen);
 
+static int  rp23xx_window(struct sdio_dev_s *dev, size_t skip, size_t len);
+
 static void sdio_restart_wd(struct rp23xx_sdio_s *priv);
 static int  sdio_retry(struct rp23xx_sdio_s *priv, int ret);
 static int  sdio_tx_check(struct rp23xx_sdio_s *priv);
@@ -445,6 +449,7 @@ static struct rp23xx_sdio_s g_sdio =
 #endif
     .dmarecvsetup     = rp23xx_dmarecvsetup,
     .dmasendsetup     = rp23xx_dmasendsetup,
+    .window           = rp23xx_window,
   },
   .waitsem = SEM_INITIALIZER(0),
 };
@@ -1253,8 +1258,67 @@ static uint32_t sdio_cbs_done(struct rp23xx_sdio_s *priv)
   return loaded > 0 ? loaded - 1 : 0;
 }
 
-/* A transfer through the ring, seen through: reads checked and copied out
- * as their blocks come in, writes' blocks copied in ahead of the DMA
+/* A block from the ring to its place in the PSRAM.  Written through the
+ * cache (the XIP cache, 8-byte lines, write-allocate), each line of a
+ * block not in the cache is first read from the PSRAM and later written
+ * back: 11 MB/s, slower than the bus.  So the whole lines the block covers
+ * are dropped from the cache (invalidated: they are all written anew; a
+ * dirty one's old bytes would otherwise be written back over the new ones
+ * later) and written past it through the uncached alias, 37 MB/s; the
+ * bytes of the partial lines at either end go through the cache.
+ */
+
+#define XIP_LINE         8
+#define PSRAM_CACHED(a)  (((uintptr_t)(a) >> 24) == 0x11)
+#define XIP_UNCACHED(a)  ((uintptr_t)(a) + 0x04000000)  /* 0x15..: no cache */
+#define XIP_INVALIDATE(a) \
+  (*(volatile uint8_t *)(0x18000000 + ((uintptr_t)(a) & 0x03fffff8) + 2) = 0)
+
+static void sdio_copy_out(uint8_t *dst, const uint8_t *src, size_t n)
+{
+  uintptr_t a = (uintptr_t)dst;
+  uintptr_t first = (a + XIP_LINE - 1) & ~(XIP_LINE - 1);
+  uintptr_t last = (a + n) & ~(XIP_LINE - 1);
+  volatile uint32_t *d;
+  const uint8_t *w;
+  uint32_t v[2];
+  uintptr_t l;
+
+  if (!PSRAM_CACHED(dst) || first >= last)
+    {
+      memcpy(dst, src, n);
+      return;
+    }
+
+  memcpy(dst, src, first - a);
+
+  for (l = first; l < last; l += XIP_LINE)
+    {
+      XIP_INVALIDATE(l);
+    }
+
+  UP_DSB();
+
+  d = (volatile uint32_t *)XIP_UNCACHED(first);
+  w = src + (first - a);
+  for (l = first; l < last; l += XIP_LINE)
+    {
+      memcpy(v, w, XIP_LINE);       /* (the source in the SRAM, any alignment) */
+      d[0] = v[0];
+      d[1] = v[1];
+      d += 2;
+      w += XIP_LINE;
+    }
+
+  UP_DSB();                       /* (written before the PSRAM is read) */
+  memcpy((uint8_t *)last, src + (last - a), a + n - last);
+}
+
+/* A transfer through the ring, seen through: reads checked (and copied
+ * out of the ring) as their blocks come in, writes' blocks copied in ahead
+ * of the DMA.  4-bit reads straight into the SRAM are seen through here
+ * too: their blocks' CRCs checked while the next blocks come, not all of
+ * them after the end.
  */
 
 static int sdio_ring_run(struct rp23xx_sdio_s *priv)
@@ -1271,7 +1335,8 @@ static int sdio_ring_run(struct rp23xx_sdio_s *priv)
 
   for (i = 0; priv->dir == DIR_RX && i < n; )
     {
-      uint32_t *slot = g_ring + i * (bl / 4);
+      uint32_t *slot = priv->ring ? g_ring + i * (bl / 4) :
+                       (uint32_t *)(priv->rxbuf + i * bl);
       uint32_t hi;
       uint32_t lo;
 
@@ -1290,12 +1355,34 @@ static int sdio_ring_run(struct rp23xx_sdio_s *priv)
           lo != __builtin_bswap32(g_rxcrc[2 * i + 1]))
         {
           syslog(LOG_WARNING, "sdio: block %" PRIu32 "/%" PRIu32
-                 " CRC (ring), fifo %s\n", i, n,
+                 " CRC (%s), fifo %s\n", i, n,
+                 priv->ring ? "ring" : "sram",
                  (getreg32(PIO_FDEBUG) & (1 << SM_RX)) ? "stalled" : "ok");
           return -EIO;
         }
 
-      memcpy(priv->rxbuf + i * bl, slot, bl);
+      if (priv->ring && priv->winlen == 0)
+        {
+          sdio_copy_out(priv->rxbuf + i * bl, (const uint8_t *)slot, bl);
+        }
+      else if (priv->ring)
+        {
+          /* Only the window's part of the block */
+
+          size_t b0 = i * bl;
+          size_t b1 = b0 + bl;
+          size_t ws = priv->winskip;
+          size_t we = ws + priv->winlen;
+
+          b0 = b0 > ws ? b0 : ws;
+          b1 = b1 < we ? b1 : we;
+          if (b0 < b1)
+            {
+              sdio_copy_out(priv->rxbuf + (b0 - ws),
+                            (const uint8_t *)slot + (b0 - i * bl), b1 - b0);
+            }
+        }
+
       i++;
     }
 
@@ -1969,7 +2056,14 @@ static int sdio_recv(struct rp23xx_sdio_s *priv, uint8_t *buffer,
    */
 
   priv->ring   = priv->widebus && bl == 512 &&
-                 (((uintptr_t)buffer & 3) != 0 || !IN_SRAM(buffer));
+                 (((uintptr_t)buffer & 3) != 0 || !IN_SRAM(buffer) ||
+                  priv->winlen != 0);
+  if (priv->winlen != 0 && (!priv->ring || priv->nblocks > RING_BLOCKS ||
+                            priv->winskip + priv->winlen > nbytes))
+    {
+      return -EINVAL;
+    }
+
   priv->bounce = !priv->ring &&
                  (!priv->widebus || ((uintptr_t)buffer & 3) != 0);
   if (priv->bounce &&
@@ -2042,6 +2136,24 @@ static int rp23xx_dmasendsetup(struct sdio_dev_s *dev,
                                const uint8_t *buffer, size_t buflen)
 {
   return sdio_send((struct rp23xx_sdio_s *)dev, buffer, buflen);
+}
+
+/* The next receive transfers keep only bytes skip .. skip + len - 1
+ * (BIOC_READWINDOW); (0, 0): all
+ */
+
+static int rp23xx_window(struct sdio_dev_s *dev, size_t skip, size_t len)
+{
+  struct rp23xx_sdio_s *priv = (struct rp23xx_sdio_s *)dev;
+
+  if (len != 0 && !priv->widebus)
+    {
+      return -ENOSYS;
+    }
+
+  priv->winskip = skip;
+  priv->winlen  = len;
+  return OK;
 }
 
 static int rp23xx_dmapreflight(struct sdio_dev_s *dev,
@@ -2367,7 +2479,9 @@ static sdio_eventset_t rp23xx_eventwait(struct sdio_dev_s *dev)
           break;
         }
 
-      if (priv->dir != DIR_NONE && priv->ring &&
+      if (priv->dir != DIR_NONE &&
+          (priv->ring || (priv->dir == DIR_RX && priv->widebus &&
+                          !priv->bounce)) &&
           (priv->waitevents & SDIOWAIT_TRANSFERDONE) != 0)
         {
           ret = sdio_ring_run(priv);
