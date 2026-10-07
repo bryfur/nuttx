@@ -981,6 +981,31 @@ config RP23XX_RNG
 		/dev/random (and /dev/urandom when CONFIG_DEV_URANDOM selects the
 		architecture source) via the TRNG entropy register (EHR).
 
+config RP23XX_RNG_SAMPLE_CNT
+	int "TRNG: clock cycles between ring oscillator samples"
+	default 512
+	depends on RP23XX_RNG
+	---help---
+		SAMPLE_CNT1: how many cycles (of clk_sys) the TRNG waits between
+		two samples of its ring oscillator, which sets how fast it
+		delivers bits: fewer cycles, faster, less jitter gathered per
+		bit.  Measured at 300 MHz: 65535 (the hardware's reset value)
+		gives about 140 bytes a second, 4096 2.3 KB/s, 256 43 KB/s; at
+		64 the on-chip autocorrelation test fails.  The default keeps a
+		margin of 8 from that.  0 leaves the reset value.
+
+config RP23XX_WDT_ALLCPUS
+	bool "Watchdog: kicked only when every CPU answers"
+	default y
+	depends on WATCHDOG && SMP
+	---help---
+		Before each reload of the watchdog (the auto-monitor's kick, or a
+		WDIOC_KEEPALIVE), make an SMP call to every CPU and wait for all
+		of them to run it.  A CPU spinning with its interrupts disabled
+		never answers, so the kick never comes and the chip resets, even
+		while the other CPU carries on scheduling.  Kicks from interrupt
+		context (the WDOG or capture auto-monitors) skip the check.
+
 config RP23XX_RTC
 	bool "Enable RTC (POWMAN always-on timer)"
 	default n
@@ -1002,6 +1027,16 @@ config RP23XX_ADC
 if RP23XX_ADC
 
 if ADC
+
+config RP23XX_ADC_SWTRIG
+	bool "Convert only when triggered (ANIOC_TRIGGER)"
+	default n
+	---help---
+		Without this, an open ADC device converts its channels round and
+		round, an interrupt for each conversion (about 500,000 a second),
+		for as long as it is open.  With it, each ANIOC_TRIGGER ioctl
+		converts each channel of the open devices once, and the ADC then
+		stops until the next trigger.
 
 config RP23XX_ADC_CHANNEL0
 	bool "Read ADC channel 0"

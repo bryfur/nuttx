@@ -40,6 +40,22 @@
 
 static unsigned long g_cpu_freq = ULONG_MAX;
 
+/* DWT_CYCCNT is 32 bits (14 s at 300 MHz) and clock_t 64: each CPU's
+ * count is extended with the wraps that CPU has seen (each core has its
+ * own counter, so one CPU's reads cannot tell another's wraps).  A CPU
+ * must read its counter at least once a wrap while it runs (context
+ * switches do, with the critical section monitor).
+ */
+
+#ifdef CONFIG_SMP
+#  define PERF_NCPUS CONFIG_SMP_NCPUS
+#else
+#  define PERF_NCPUS 1
+#endif
+
+static uint32_t g_perf_last[PERF_NCPUS];
+static uint32_t g_perf_wraps[PERF_NCPUS];
+
 /****************************************************************************
  * Public Functions
  ****************************************************************************/
@@ -67,7 +83,20 @@ unsigned long up_perf_getfreq(void)
 
 clock_t up_perf_gettime(void)
 {
-  return getreg32(DWT_CYCCNT);
+  irqstate_t flags = up_irq_save();
+  int cpu = up_cpu_index();
+  uint32_t now = getreg32(DWT_CYCCNT);
+  clock_t result;
+
+  if (now < g_perf_last[cpu])
+    {
+      g_perf_wraps[cpu]++;
+    }
+
+  g_perf_last[cpu] = now;
+  result = (clock_t)((uint64_t)g_perf_wraps[cpu] << 32 | now);
+  up_irq_restore(flags);
+  return result;
 }
 
 void up_perf_convert(clock_t elapsed, struct timespec *ts)

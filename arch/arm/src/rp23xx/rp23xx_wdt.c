@@ -43,7 +43,12 @@
 
 #include <nuttx/arch.h>
 #include <nuttx/clock.h>
+#include <nuttx/sched.h>
 #include <nuttx/timers/watchdog.h>
+
+#ifdef CONFIG_RP23XX_WDT_ALLCPUS
+#  include <sched.h>
+#endif
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -118,6 +123,31 @@ static watchdog_lowerhalf_t g_rp23xx_watchdog_lowerhalf =
  * Private Functions
  ****************************************************************************/
 
+#ifdef CONFIG_RP23XX_WDT_ALLCPUS
+/****************************************************************************
+ * Name: rp23xx_wdt_alive
+ *
+ * Description:
+ *   Run on each CPU (an SMP call, in its interrupt handler) before the
+ *   watchdog is reloaded: a CPU spinning with its interrupts disabled
+ *   never answers, so the caller never reloads and the chip resets.
+ *
+ ****************************************************************************/
+
+static int rp23xx_wdt_alive(FAR void *arg)
+{
+#ifdef CONFIG_ARCH_PERF_EVENTS
+  /* While here, every second on every CPU: the cycle counter read, so
+   * that the 64-bit count it is extended to sees each wrap (arm_perf.c)
+   */
+
+  up_perf_gettime();
+#endif
+
+  return OK;
+}
+#endif
+
 /****************************************************************************
  * Name: rp23xx_wdt_start
  ****************************************************************************/
@@ -171,6 +201,28 @@ int rp23xx_wdt_keepalive(struct watchdog_lowerhalf_s *lower)
   watchdog_lowerhalf_t *priv = (watchdog_lowerhalf_t *)lower;
 
   wdinfo("Entry\n");
+
+#ifdef CONFIG_RP23XX_WDT_ALLCPUS
+  /* From a thread (the auto-monitor's worker, or /dev/watchdog's user):
+   * first every CPU must take an interrupt.  The call returns only when
+   * all of them have, so a CPU stuck with its interrupts off holds the
+   * kick back for good.  An interrupt handler cannot wait for that.
+   */
+
+  if (!up_interrupt_context())
+    {
+      cpu_set_t cpus;
+      int cpu;
+
+      CPU_ZERO(&cpus);
+      for (cpu = 0; cpu < CONFIG_SMP_NCPUS; cpu++)
+        {
+          CPU_SET(cpu, &cpus);
+        }
+
+      nxsched_smp_call(cpus, rp23xx_wdt_alive, NULL);
+    }
+#endif
 
   putreg32(priv->timeout * USEC_PER_MSEC,  RP23XX_WATCHDOG_LOAD);
 

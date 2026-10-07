@@ -53,6 +53,16 @@
  *    receives when the buffer is full; therefore, if the data is not read
  *    for a while, the returned values may be stale when finally read. You
  *    can use the ANIOC_RESET_FIFO ioctl call to flush this stale data.
+ *
+ *    With CONFIG_RP23XX_ADC_SWTRIG it converts only on ANIOC_TRIGGER: each
+ *    needed channel once, in order, then the ADC stops (an interrupt per
+ *    conversion only while a trigger's round lasts).
+ *
+ *    --------------
+ *
+ *    Only the pins of the channels a device reads are made analog inputs
+ *    (on the RP2350B, channels 0-7 are GPIO 40-47, which boards also use
+ *    for other things: an SD card, the PSRAM's chip select).
  ****************************************************************************/
 
 /****************************************************************************
@@ -67,6 +77,7 @@
 #include <errno.h>
 
 #include <nuttx/analog/adc.h>
+#include <nuttx/analog/ioctl.h>
 #include <nuttx/kmalloc.h>
 
 #include <rp23xx_gpio.h>
@@ -143,13 +154,21 @@ static const struct adc_ops_s g_adcops =
 
 static const int8_t g_gpio_map[ADC_CHANNEL_COUNT] =
 {
+#ifdef CONFIG_RP23XX_RP2350B
+  40, 41, 42, 43, 44, 45, 46, 47, -1
+#else
   26, 27, 28, 29, -1
+#endif
 };
 
 static struct adc_dev_s *g_first_device     = NULL;
 
 static uint8_t               g_current_channel  = 0xf0; /* too big */
 static uint8_t               g_active_count     = 0;
+
+#ifdef CONFIG_RP23XX_ADC_SWTRIG
+static bool                  g_idle             = true; /* No round */
+#endif
 
 /****************************************************************************
  * Private Functions
@@ -166,6 +185,53 @@ static uint8_t               g_active_count     = 0;
  *
  ****************************************************************************/
 
+static void adc_off(void)
+{
+  putreg32(0, RP23XX_ADC_CS);
+
+  putreg32(0, RP23XX_ADC_INTE);
+
+  up_disable_irq(RP23XX_ADC_IRQ_FIFO);
+
+  irq_detach(RP23XX_ADC_IRQ_FIFO);
+
+  /* Flush the FIFO */
+
+  while (getreg32(RP23XX_ADC_FCS) & RP23XX_ADC_FCS_LEVEL_MASK)
+    {
+      getreg32(RP23XX_ADC_FIFO);
+    }
+
+#ifdef CONFIG_RP23XX_ADC_SWTRIG
+  g_idle = true;
+#endif
+}
+
+#ifdef CONFIG_RP23XX_ADC_SWTRIG
+/* Whether an open device reads a channel after the current one */
+
+static bool adc_more(void)
+{
+  struct adc_dev_s *a_device;
+  int ch;
+
+  for (ch = g_current_channel + 1; ch < ADC_CHANNEL_COUNT; ch++)
+    {
+      for (a_device = g_first_device;
+           a_device != NULL;
+           a_device = PRIV(a_device)->next_device)
+        {
+          if (PRIV(a_device)->has_channel[ch])
+            {
+              return true;
+            }
+        }
+    }
+
+  return false;
+}
+#endif
+
 static int interrupt_handler(int irq, void *context, void *arg)
 {
   struct adc_dev_s            *a_device;
@@ -177,21 +243,7 @@ static int interrupt_handler(int irq, void *context, void *arg)
     {
       /* Last device has been removed -- turn off ADC */
 
-      putreg32(0, RP23XX_ADC_CS);
-
-      putreg32(0, RP23XX_ADC_INTE);
-
-      up_disable_irq(RP23XX_ADC_IRQ_FIFO);
-
-      irq_detach(RP23XX_ADC_IRQ_FIFO);
-
-      /* Flush the FIFO */
-
-      while (getreg32(RP23XX_ADC_FCS) & RP23XX_ADC_FCS_LEVEL_MASK)
-        {
-          getreg32(RP23XX_ADC_FIFO);
-        }
-
+      adc_off();
       return OK;
     }
 
@@ -228,6 +280,19 @@ static int interrupt_handler(int irq, void *context, void *arg)
             }
         }
     }
+
+#ifdef CONFIG_RP23XX_ADC_SWTRIG
+  /* The round ends with the last channel needed: the ADC stays enabled
+   * (and the temperature sensor biased) until the next trigger
+   */
+
+  if (!adc_more())
+    {
+      putreg32(0, RP23XX_ADC_INTE);
+      g_idle = true;
+      return OK;
+    }
+#endif
 
   /* Start next channel read */
 
@@ -370,11 +435,13 @@ static void add_device(struct adc_dev_s *dev)
 
       up_enable_irq(RP23XX_ADC_IRQ_FIFO);
 
+#ifndef CONFIG_RP23XX_ADC_SWTRIG
       /* Start conversions on first required channel.  */
 
       get_next_channel();
 
       ainfo("new cur %d\n", g_current_channel);
+#endif
     }
 }
 
@@ -418,8 +485,11 @@ void remove_device(struct adc_dev_s *dev)
               PRIV(PRIV(dev)->prior_device)->next_device =
               PRIV(dev)->next_device;
 
-              PRIV(PRIV(dev)->next_device)->prior_device =
-                PRIV(dev)->prior_device;
+              if (PRIV(dev)->next_device != NULL)
+                {
+                  PRIV(PRIV(dev)->next_device)->prior_device =
+                    PRIV(dev)->prior_device;
+                }
 
               g_active_count -= 1;
 
@@ -427,6 +497,15 @@ void remove_device(struct adc_dev_s *dev)
             }
         }
     }
+
+#ifdef CONFIG_RP23XX_ADC_SWTRIG
+  /* No conversion is under way to turn the ADC off at its end */
+
+  if (g_active_count == 0 && g_idle)
+    {
+      adc_off();
+    }
+#endif
 }
 
 /****************************************************************************
@@ -459,7 +538,8 @@ static int my_bind(struct adc_dev_s            *dev,
  *   process.  The upper half documentation also claims that it may
  *   be called as part of an error condition.
  *
- *   Set the pin for the ADC's to standard GPIO input with no pulls.
+ *   Set the pins of the device's channels to standard GPIO input with no
+ *   pulls (and only those: other ADC pins may be in use for other things).
  *
  ****************************************************************************/
 
@@ -473,10 +553,10 @@ static void my_reset(struct adc_dev_s *dev)
     {
       a_gpio = g_gpio_map[i];
 
-      if (a_gpio >= 0)
+      if (a_gpio >= 0 && PRIV(dev)->has_channel[i])
         {
           rp23xx_gpio_setdir(a_gpio, false);
-          rp23xx_gpio_set_function(a_gpio, GPIO_FUNC_NULL);
+          rp23xx_gpio_set_function(a_gpio, RP23XX_GPIO_FUNC_NULL);
           rp23xx_gpio_set_pulls(a_gpio, false, false);
         }
     }
@@ -576,9 +656,28 @@ static int my_ioctl(struct adc_dev_s *dev,
                     int               cmd,
                     unsigned long     arg)
 {
-  /* No ioctl commands supported */
-
   ainfo("entered\n");
+
+#ifdef CONFIG_RP23XX_ADC_SWTRIG
+  if (cmd == ANIOC_TRIGGER)
+    {
+      irqstate_t flags = enter_critical_section();
+
+      /* A round of each channel needed, from the first, unless one is
+       * already under way (its values serve this trigger too)
+       */
+
+      if (g_idle && g_active_count > 0)
+        {
+          g_idle = false;
+          g_current_channel = ADC_CHANNEL_COUNT - 1;
+          get_next_channel();
+        }
+
+      leave_critical_section(flags);
+      return OK;
+    }
+#endif
 
   return -ENOTTY;
 }
@@ -649,7 +748,7 @@ int rp23xx_adc_setup(const char *path,
   priv->has_channel[1] = read_adc1;
   priv->has_channel[2] = read_adc2;
   priv->has_channel[3] = read_adc3;
-  priv->has_channel[4] = read_temp;
+  priv->has_channel[ADC_TEMP_CHANNEL] = read_temp;
 
   dev->ad_ops  = &g_adcops;
   dev->ad_priv = priv;
