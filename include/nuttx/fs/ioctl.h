@@ -399,6 +399,12 @@
                                            * IN:  None
                                            * OUT: None (ioctl return value provides
                                            *      success/failure indication). */
+#define BIOC_READWINDOW _BIOC(0x0012)     /* Read a run of sectors in one
+                                           * transfer, only part of it kept
+                                           * IN:  Pointer to a struct
+                                           *      blk_window_s (fs.h)
+                                           * OUT: Its bytes in its buffer;
+                                           *      -ENOTTY if not supported */
 
 /* NuttX MTD driver ioctl definitions ***************************************/
 
@@ -855,6 +861,22 @@
 /****************************************************************************
  * Public Type Definitions
  ****************************************************************************/
+
+/* BIOC_READWINDOW: sectors start .. start + nsectors - 1 read in one
+ * transfer, of which bytes skip .. skip + len - 1 (counted from the start
+ * of the first sector) go to buffer; the rest is dropped.  Saves the
+ * separate transfers of the partial first and last sectors of a read that
+ * does not begin and end on sector boundaries.
+ */
+
+struct blk_window_s
+{
+  blkcnt_t     start;
+  unsigned int nsectors;
+  size_t       skip;
+  size_t       len;
+  FAR uint8_t *buffer;
+};
 
 struct geometry
 {

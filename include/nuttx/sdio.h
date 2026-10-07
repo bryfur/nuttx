@@ -935,6 +935,18 @@
     ((dev)->gotextcsd?(dev)->gotextcsd(dev,buffer):OK)
 
 /****************************************************************************
+ * Name: SDIO_WINDOW
+ *
+ * Description:
+ *   Keep only part of the next receive transfer (struct sdio_dev_s window;
+ *   BIOC_READWINDOW).  -ENOSYS if the lower half cannot.
+ *
+ ****************************************************************************/
+
+#define SDIO_WINDOW(dev,skip,len) \
+  ((dev)->window ? (dev)->window(dev,skip,len) : -ENOSYS)
+
+/****************************************************************************
  * Public Types
  ****************************************************************************/
 
@@ -1066,6 +1078,14 @@ struct sdio_dev_s
 #endif /* CONFIG_SDIO_DMA */
   CODE void  (*gotextcsd)(FAR struct sdio_dev_s *dev,
                           FAR const uint8_t *buffer);
+
+  /* Optional: the next receive transfer set up keeps only its bytes
+   * skip .. skip + len - 1, put at the start of the buffer given to
+   * recvsetup/dmarecvsetup; (0, 0) back to whole transfers
+   * (BIOC_READWINDOW)
+   */
+
+  CODE int   (*window)(FAR struct sdio_dev_s *dev, size_t skip, size_t len);
 };
 
 /****************************************************************************

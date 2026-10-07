@@ -2718,6 +2718,38 @@ static int mmcsd_ioctl(FAR struct inode *inode, int cmd, unsigned long arg)
       break;
 #endif
 
+    case BIOC_READWINDOW: /* Part of a run of sectors, in one transfer */
+      {
+        FAR struct blk_window_s *win = (FAR struct blk_window_s *)arg;
+        ssize_t nread;
+
+        if (win == NULL || win->nsectors == 0 ||
+            win->nsectors > MMCSD_MULTIBLOCK_LIMIT ||
+            win->skip + win->len > ((size_t)win->nsectors <<
+                                    priv->blockshift) ||
+            SDIO_WINDOW(priv->dev, win->skip, win->len) != OK)
+          {
+            ret = -ENOTTY;
+            break;
+          }
+
+#if MMCSD_MULTIBLOCK_LIMIT != 1
+        if (win->nsectors > 1)
+          {
+            nread = mmcsd_readmultiple(part, win->buffer, win->start,
+                                       win->nsectors);
+          }
+        else
+#endif
+          {
+            nread = mmcsd_readsingle(part, win->buffer, win->start);
+          }
+
+        SDIO_WINDOW(priv->dev, 0, 0);
+        ret = nread < 0 ? (int)nread : OK;
+      }
+      break;
+
     default:
       ret = -ENOTTY;
       break;

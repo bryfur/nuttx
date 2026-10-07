@@ -1520,6 +1520,7 @@ int fat_dirshrink(struct fat_mountpt_s *fs, FAR uint8_t *direntry,
 {
   off_t clustersize;
   off_t remaining;
+  off_t savesector;
   uint32_t writetime;
   int32_t lastcluster;
   int32_t cluster;
@@ -1529,6 +1530,7 @@ int fat_dirshrink(struct fat_mountpt_s *fs, FAR uint8_t *direntry,
 
   lastcluster = ((uint32_t)DIR_GETFSTCLUSTHI(direntry) << 16) |
                  DIR_GETFSTCLUSTLO(direntry);
+  savesector  = fs->fs_currentsector;
 
   /* Set the file size to the new length.  */
 
@@ -1565,11 +1567,11 @@ int fat_dirshrink(struct fat_mountpt_s *fs, FAR uint8_t *direntry,
 
       if (remaining <= clustersize)
         {
-          /* No.. then nullify next cluster -- removing it from the
-           * chain.
+          /* No.. then end the chain at the last cluster kept (marked as
+           * the end of the chain, not as free) ...
            */
 
-          ret = fat_putcluster(fs, lastcluster, 0);
+          ret = fat_putcluster(fs, lastcluster, 0x0fffffff);
           if (ret < 0)
             {
               return ret;
@@ -1602,7 +1604,11 @@ int fat_dirshrink(struct fat_mountpt_s *fs, FAR uint8_t *direntry,
       remaining  -= clustersize;
     }
 
-  return OK;
+  /* The caller reads the directory entry again: make sure that it is still
+   * in the cache (the FAT went through it)
+   */
+
+  return fat_fscacheread(fs, savesector);
 }
 
 /****************************************************************************

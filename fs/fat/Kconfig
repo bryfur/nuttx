@@ -96,6 +96,17 @@ config FS_FATTIME
 		much sense in supporting FAT date and time unless you have a
 		hardware RTC or other way to get the time and date.
 
+config FAT_MAXRUNS
+	int "Cluster runs remembered per open file"
+	default 64
+	---help---
+		Each open file remembers its cluster chain, as far as it has been
+		read, as runs of consecutive clusters (8 bytes a run, allocated as
+		needed): a seek anywhere in what is known then needs no walk of
+		the FAT from the file's first cluster, and a read goes on across
+		the clusters of a run in one transfer.  A file in more runs than
+		this is remembered up to there.  0: nothing remembered.
+
 config FAT_FORCE_INDIRECT
 	bool "Force direct transfers"
 	default n

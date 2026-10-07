@@ -888,6 +888,7 @@ struct fat_mountpt_s
   bool     fs_mounted;             /* true: The file system is ready */
   bool     fs_dirty;               /* true: fs_buffer is dirty */
   bool     fs_fsidirty;            /* true: FSINFO sector must be written to disk */
+  bool     fs_nowindow;            /* true: no BIOC_READWINDOW in the driver */
   uint8_t  fs_type;                /* FSTYPE_FAT12, FSTYPE_FAT16, or FSTYPE_FAT32 */
   uint8_t  fs_fatnumfats;          /* MBR: Number of FATs (probably 2) */
   uint8_t  fs_fatsecperclus;       /* MBR: Sectors per allocation unit: 2**n, n=0..7 */
@@ -916,6 +917,16 @@ struct fat_mountpt_s
  *    a new object.
  */
 
+/* A run of consecutive clusters of a file: the file's clusters r_index
+ * on (up to the next run's r_index) are clusters r_cluster on
+ */
+
+struct fat_run_s
+{
+  uint32_t r_index;                   /* The file's cluster index */
+  uint32_t r_cluster;                 /* ... is this cluster */
+};
+
 struct fat_shared_s
 {
   FAR struct fat_shared_s *s_next;    /* Retained in a singly linked list */
@@ -926,6 +937,16 @@ struct fat_shared_s
   off_t    s_dirsector;               /* Sector containing the directory entry */
   off_t    s_size;                    /* Size of the file in bytes */
   off_t    s_startcluster;            /* Start cluster of file on media */
+
+  /* The chain as far as it has been walked: clusters 0 .. s_mapped - 1
+   * of the file, in s_nruns runs (room for s_maxruns).  Emptied whenever
+   * the chain is cut (fat_shared_reset_cursors()).
+   */
+
+  FAR struct fat_run_s *s_runs;
+  uint16_t s_nruns;
+  uint16_t s_maxruns;
+  uint32_t s_mapped;
 };
 
 /* This structure represents on open file under the mountpoint.  An instance

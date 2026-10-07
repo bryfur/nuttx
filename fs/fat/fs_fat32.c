@@ -270,6 +270,129 @@ static void fat_shared_reset_cursors(FAR struct fat_mountpt_s *fs,
           ff->ff_pos              = 0;
         }
     }
+
+  /* The chain was cut (or replaced): what the map knew may be gone */
+
+  shared->s_nruns  = 0;
+  shared->s_mapped = 0;
+}
+
+/****************************************************************************
+ * Name: fat_map_find
+ *
+ * Description:
+ *   The cluster of a file's cluster index from the shared map of its chain,
+ *   if the map has it.
+ *
+ * Input Parameters:
+ *   shared - The file (caller holds fs_lock)
+ *   index  - The file's cluster index (0: its first cluster)
+ *   after  - Where to return how many clusters of the same run (so
+ *            consecutive on the media) follow it, or NULL
+ *
+ * Returned Value:
+ *   The cluster, or 0 if the map does not reach that far.
+ *
+ ****************************************************************************/
+
+static uint32_t fat_map_find(FAR struct fat_shared_s *shared,
+                             uint32_t index, FAR uint32_t *after)
+{
+  FAR const struct fat_run_s *runs = shared->s_runs;
+  int lo = 0;
+  int hi = shared->s_nruns - 1;
+
+  if (index >= shared->s_mapped)
+    {
+      return 0;
+    }
+
+  /* The last run starting at or before index */
+
+  while (lo < hi)
+    {
+      int mid = (lo + hi + 1) / 2;
+
+      if (runs[mid].r_index <= index)
+        {
+          lo = mid;
+        }
+      else
+        {
+          hi = mid - 1;
+        }
+    }
+
+  if (after != NULL)
+    {
+      *after = (lo + 1 < shared->s_nruns ? runs[lo + 1].r_index :
+                                           shared->s_mapped) - index - 1;
+    }
+
+  return runs[lo].r_cluster + (index - runs[lo].r_index);
+}
+
+/****************************************************************************
+ * Name: fat_map_add
+ *
+ * Description:
+ *   Add the next cluster of the chain to the file's map: index must be the
+ *   first cluster index the map does not have (other calls are ignored).
+ *   The map stops growing at CONFIG_FAT_MAXRUNS runs, or when memory runs
+ *   out; it is only ever a shortcut.
+ *
+ ****************************************************************************/
+
+static void fat_map_add(FAR struct fat_shared_s *shared, uint32_t index,
+                        uint32_t cluster)
+{
+#if CONFIG_FAT_MAXRUNS > 0
+  FAR struct fat_run_s *runs;
+  int n;
+
+  if (index != shared->s_mapped)
+    {
+      return;
+    }
+
+  if (shared->s_nruns > 0)
+    {
+      runs = &shared->s_runs[shared->s_nruns - 1];
+      if (runs->r_cluster + (index - runs->r_index) == cluster)
+        {
+          shared->s_mapped++;                /* The run goes on */
+          return;
+        }
+    }
+
+  if (shared->s_nruns == shared->s_maxruns)
+    {
+      if (shared->s_maxruns >= CONFIG_FAT_MAXRUNS)
+        {
+          return;
+        }
+
+      n = shared->s_maxruns > 0 ? 2 * shared->s_maxruns : 4;
+      if (n > CONFIG_FAT_MAXRUNS)
+        {
+          n = CONFIG_FAT_MAXRUNS;
+        }
+
+      runs = fs_heap_realloc(shared->s_runs, n * sizeof(struct fat_run_s));
+      if (runs == NULL)
+        {
+          return;
+        }
+
+      shared->s_runs    = runs;
+      shared->s_maxruns = n;
+    }
+
+  shared->s_runs[shared->s_nruns].r_index   = index;
+  shared->s_runs[shared->s_nruns].r_cluster = cluster;
+  shared->s_nruns++;
+  shared->s_mapped++;
+#endif
 }
 
 /****************************************************************************
@@ -325,6 +448,7 @@ static int fat_shared_release(FAR struct fat_mountpt_s *fs,
   startcluster = shared->s_startcluster;
   pending      = shared->s_pending;
 
+  fs_heap_free(shared->s_runs);
   fs_heap_free(shared);
 
   if (pending && startcluster >= 2)
@@ -388,11 +512,11 @@ static int fat_shrinkshared(FAR struct fat_mountpt_s *fs,
 
       if (remaining <= clustersize)
         {
-          /* No.. then nullify next cluster -- removing it from the
-           * chain.
+          /* No.. then end the chain at the last cluster kept (marked
+           * as the end of the chain, not as free).
            */
 
-          ret = fat_putcluster(fs, lastcluster, 0);
+          ret = fat_putcluster(fs, lastcluster, 0x0fffffff);
           if (ret < 0)
             {
               return ret;
@@ -534,7 +658,7 @@ static int fat_open(FAR struct file *filep, FAR const char *relpath,
        * access is ignored.
        */
 
-      if ((oflags & (O_TRUNC | O_WRONLY)) == (O_TRUNC | O_WRONLY))
+      if ((oflags & O_TRUNC) != 0 && (oflags & O_ACCMODE) != O_RDONLY)
         {
           /* Truncate the file to zero length.  If the file is already
            * open elsewhere, the shared state is updated as well so that
@@ -842,6 +966,7 @@ static int fat_close(FAR struct file *filep)
 
       if (--shared->s_refs == 0)
         {
+          fs_heap_free(shared->s_runs);
           fs_heap_free(shared);
         }
     }
@@ -939,6 +1064,153 @@ out:
 }
 
 /****************************************************************************
+ * Name: fat_advance
+ *
+ * Description:
+ *   Move a file's sector cursor on by nsectors read in a row from
+ *   ->ff_currentsector, across the clusters after the current one if it
+ *   goes past its end (they are then consecutive on the media: the map of
+ *   the chain said so).
+ *
+ ****************************************************************************/
+
+static void fat_advance(FAR struct fat_mountpt_s *fs,
+                        FAR struct fat_file_s *ff, unsigned int nsectors)
+{
+  if (nsectors > ff->ff_sectorsincluster)
+    {
+      /* Into the last cluster read, as if read cluster by cluster */
+
+      unsigned int more = nsectors - ff->ff_sectorsincluster;
+      unsigned int k = (more + fs->fs_fatsecperclus - 1) /
+                       fs->fs_fatsecperclus;
+
+      ff->ff_currentcluster  += k;
+      ff->ff_pos             += (off_t)k * fs->fs_fatsecperclus *
+                                fs->fs_hwsectorsize;
+      ff->ff_sectorsincluster = k * fs->fs_fatsecperclus - more;
+    }
+  else
+    {
+      ff->ff_sectorsincluster -= nsectors;
+    }
+
+  ff->ff_currentsector += nsectors;
+}
+
+/****************************************************************************
+ * Name: fat_contiguous
+ *
+ * Description:
+ *   The sectors on the media in a row from ->ff_currentsector that belong
+ *   to the file in that order: the rest of the current cluster and the
+ *   clusters right after it, as far as the map of the chain knows them.
+ *
+ ****************************************************************************/
+
+static uint32_t fat_contiguous(FAR struct fat_mountpt_s *fs,
+                               FAR struct file *filep,
+                               FAR struct fat_file_s *ff)
+{
+  uint32_t after = 0;
+
+  fat_map_find(ff->ff_shared,
+               filep->f_pos / (fs->fs_fatsecperclus * fs->fs_hwsectorsize),
+               &after);
+  return ff->ff_sectorsincluster + after * fs->fs_fatsecperclus;
+}
+
+/****************************************************************************
+ * Name: fat_read_window
+ *
+ * Description:
+ *   A read that does not start or does not end on a sector boundary and
+ *   needs more than one sector, in one transfer of all its sectors (the
+ *   block driver keeping only the bytes wanted: BIOC_READWINDOW), rather
+ *   than one for the partial first sector, one for the whole ones and one
+ *   for the partial last sector.  On an SD card each transfer costs about
+ *   0.3 ms whatever its size.
+ *
+ * Returned Value:
+ *   The bytes read (> 0); 0 if not done this way (not such a read, or not
+ *   a driver that can); a negated errno value on a read error.
+ *
+ ****************************************************************************/
+
+#define FAT_WINDOW_SECTORS 32  /* At most (a transfer of MMCSD's) */
+
+static ssize_t fat_read_window(FAR struct fat_mountpt_s *fs,
+                               FAR struct file *filep,
+                               FAR struct fat_file_s *ff,
+                               FAR uint8_t *buffer, size_t buflen,
+                               unsigned int sectorindex)
+{
+  FAR struct inode *inode = fs->fs_blkdriver;
+  struct blk_window_s win;
+  size_t ss = fs->fs_hwsectorsize;
+  uint32_t n;
+  uint32_t avail;
+  int ret;
+
+  if (fs->fs_nowindow || sectorindex + buflen <= ss ||
+      (sectorindex == 0 && (buflen & (ss - 1)) == 0))
+    {
+      return 0;
+    }
+
+  n = (sectorindex + buflen + ss - 1) / ss;
+  avail = fat_contiguous(fs, filep, ff);
+  if (n > avail)
+    {
+      n = avail;
+    }
+
+  if (n > FAT_WINDOW_SECTORS)
+    {
+      n = FAT_WINDOW_SECTORS;
+    }
+
+  if (n < 2)
+    {
+      return 0;
+    }
+
+  /* A dirty sector of the file's own buffer to the media first */
+
+  ret = fat_ffcacheflush(fs, ff);
+  if (ret < 0)
+    {
+      return ret;
+    }
+
+  win.start    = ff->ff_currentsector;
+  win.nsectors = n;
+  win.skip     = sectorindex;
+  win.len      = n * ss - sectorindex;
+  win.buffer   = buffer;
+  if (win.len > buflen)
+    {
+      win.len = buflen;
+    }
+
+  ret = inode->u.i_bops->ioctl != NULL ?
+        inode->u.i_bops->ioctl(inode, BIOC_READWINDOW, (uintptr_t)&win) :
+        -ENOTTY;
+  if (ret == -ENOTTY || ret == -ENOSYS)
+    {
+      fs->fs_nowindow = true;
+      return 0;
+    }
+  else if (ret < 0)
+    {
+      return ret;
+    }
+
+  fat_advance(fs, ff, (sectorindex + win.len) / ss);
+  return win.len;
+}
+
+/****************************************************************************
  * Name: fat_get_sectors
  *
  * Description:
@@ -1005,6 +1277,27 @@ static int fat_get_sectors(FAR struct file *filep, bool read)
       num_traversed = 1;
     }
 
+  /* The map of the chain has the cluster wanted, or one further on than
+   * where the walk would start: from there (a walk from the end of the
+   * map adds to it)
+   */
+
+  if (cluster != 0)
+    {
+      uint32_t want = num_clu < new_num_clu ? num_clu : new_num_clu;
+      uint32_t known = want < shared->s_mapped ? want : shared->s_mapped;
+
+      if (shared->s_mapped == 0)
+        {
+          fat_map_add(shared, 0, shared->s_startcluster);
+        }
+      else if (known >= num_traversed)
+        {
+          cluster = fat_map_find(shared, known - 1, NULL);
+          num_traversed = known;
+        }
+    }
+
   /* Traverse the existing chain */
 
   for (i = num_traversed; i < num_clu && i < new_num_clu; i++)
@@ -1017,6 +1310,8 @@ static int fat_get_sectors(FAR struct file *filep, bool read)
         {
           return -EIO;
         }
+
+      fat_map_add(shared, i, cluster);
     }
 
   if (read)
@@ -1034,10 +1329,12 @@ static int fat_get_sectors(FAR struct file *filep, bool read)
    *          s_size                              f_pos
    */
 
-  /* zero area (1) */
+  /* zero area (1): the end of the last cluster, unless the file fills it
+   * (a size that is a multiple of the cluster size)
+   */
 
   if (i == num_clu && filep->f_pos > shared->s_size &&
-      shared->s_size != 0)
+      (shared->s_size & (clu_size - 1)) != 0)
     {
       zero_start = ff->ff_shared->s_size & (clu_size - 1);
 
@@ -1149,6 +1446,7 @@ static ssize_t fat_read(FAR struct file *filep, FAR char *buffer,
 
 #ifndef CONFIG_FAT_FORCE_INDIRECT
   unsigned int nsectors;
+  ssize_t winread;
   bool force_indirect = false;
 #endif
 
@@ -1242,13 +1540,30 @@ fat_read_restart:
 #endif
 
 #ifndef CONFIG_FAT_FORCE_INDIRECT
+      /* Partial sectors at either end: all of it in one transfer if the
+       * block driver can
+       */
+
+      winread = force_indirect ? 0 :
+                fat_read_window(fs, filep, ff, userbuffer, buflen,
+                                sectorindex);
+      if (winread < 0)
+        {
+          ret = winread;
+          goto errout_with_lock;
+        }
+
       /* Check if the user has provided a buffer large enough to hold one
        * or more complete sectors -AND- the read is aligned to a sector
        * boundary.
        */
 
       nsectors = buflen / fs->fs_hwsectorsize;
-      if (nsectors > 0 && sectorindex == 0 && !force_indirect)
+      if (winread > 0)
+        {
+          bytesread = winread;          /* Done, in one transfer */
+        }
+      else if (nsectors > 0 && sectorindex == 0 && !force_indirect)
         {
           /* Read maximum contiguous sectors directly to the user's
            * buffer without using our tiny read buffer.
@@ -1258,9 +1573,18 @@ fat_read_restart:
            * in this cluster
            */
 
+          /* ... or on through the clusters right after it on the media,
+           * as far as the map of the chain knows them
+           */
+
           if (nsectors > ff->ff_sectorsincluster)
             {
-              nsectors = ff->ff_sectorsincluster;
+              uint32_t avail = fat_contiguous(fs, filep, ff);
+
+              if (nsectors > avail)
+                {
+                  nsectors = avail;
+                }
             }
 
           /* We are not sure of the state of the file buffer so
@@ -1295,9 +1619,8 @@ fat_read_restart:
               goto errout_with_lock;
             }
 
-          ff->ff_sectorsincluster -= nsectors;
-          ff->ff_currentsector    += nsectors;
-          bytesread                = nsectors * fs->fs_hwsectorsize;
+          fat_advance(fs, ff, nsectors);
+          bytesread = nsectors * fs->fs_hwsectorsize;
         }
       else
 #endif /* CONFIG_FAT_FORCE_INDIRECT */
@@ -2839,21 +3162,20 @@ static int fat_truncate(FAR struct file *filep, off_t length)
     }
   else
     {
-      /* Otherwise we are extending the file.  This is essentially the same
-       * as a write except that (1) we write zeros and (2) we don't update
-       * the file position.
+      /* Otherwise we are extending the file: a zero written at length - 1,
+       * which adds the clusters and zeroes the gap as any write past the
+       * end does; the file position stays where it was.
        */
 
-      ret = fat_dirextend(fs, ff, length);
-      if (ret >= 0)
-        {
-          /* The truncation has completed without error.  Update the file
-           * size.
-           */
+      off_t savepos = filep->f_pos;
+      char zero = 0;
+      ssize_t nwritten;
 
-          ff->ff_shared->s_size = length;
-          ret = OK;
-        }
+      nxmutex_unlock(&fs->fs_lock);
+      filep->f_pos = length - 1;
+      nwritten = fat_write(filep, &zero, 1);
+      filep->f_pos = savepos;
+      return nwritten < 0 ? (int)nwritten : OK;
     }
 
 errout_with_lock:

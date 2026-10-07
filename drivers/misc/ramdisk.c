@@ -360,6 +360,23 @@ static int rd_ioctl(FAR struct inode *inode, int cmd, unsigned long arg)
       return OK;
     }
 
+  if (cmd == BIOC_READWINDOW && arg != 0)
+    {
+      FAR struct blk_window_s *win = (FAR struct blk_window_s *)arg;
+
+      dev = inode->i_private;
+      if (win->start >= dev->rd_nsectors ||
+          win->nsectors > dev->rd_nsectors - win->start ||
+          win->skip + win->len > (size_t)win->nsectors * dev->rd_sectsize)
+        {
+          return -EINVAL;
+        }
+
+      memcpy(win->buffer, dev->rd_buffer +
+             (size_t)win->start * dev->rd_sectsize + win->skip, win->len);
+      return OK;
+    }
+
   return -ENOTTY;
 }
 
