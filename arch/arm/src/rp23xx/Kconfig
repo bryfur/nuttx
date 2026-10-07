@@ -847,10 +847,12 @@ config RP23XX_SDIO_D0_GPIO
 
 config RP23XX_SDIO_MAXBLOCKS
 	int "Most blocks in one transfer"
-	default 64
+	default 32
 	range 1 1024
 	---help---
-		Sizes the DMA control block and CRC tables (36 bytes a block).
+		Sizes the DMA control block and CRC tables and the SRAM buffer
+		that transfers to and from the PSRAM go through: 548 bytes of
+		SRAM a block (17.5 KB at 32).
 
 config RP23XX_SDIO_HIGHSPEED
 	bool "High speed (50 MHz)"
@@ -860,6 +862,13 @@ config RP23XX_SDIO_HIGHSPEED
 		that can (CMD6) and then sets the 50 MHz clock (the system
 		clock divided by 6, rounded down to a whole divider).  The host
 		falls back to 25 MHz if no sampling point works there.
+
+config RP23XX_SDIO_PROBETRACE
+	bool "Trace the probe's CMD8 (debug)"
+	default n
+	---help---
+		Sample CLK and CMD with the PIO block's fourth state machine
+		around the probe's first CMD8 and log CMD at each rising edge.
 
 endif # RP23XX_SDIO
 

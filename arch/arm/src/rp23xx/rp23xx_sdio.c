@@ -29,7 +29,7 @@
  *
  *   SM0  the clock and the command line.  It makes the clock all the time
  *        (side-set), idle or not; it sends a 48-bit command when the CPU
- *        has put two words in its FIFO and samples the response, the CMD
+ *        has put its two words in (the first pulled at once) and samples the response, the CMD
  *        input inverted (GPIO INOVER) so that "jmp pin" finds the start
  *        bit.  Commands change on the falling edge; the response is
  *        sampled on the falling or the rising edge (its "variant"), the
@@ -267,6 +267,8 @@
 #define XFER_ERROR       3
 
 #define BOUNCE_BYTES     (512 + 8)
+#define RING_BLOCKS      MAXBLOCKS                    /* for the PSRAM */
+#define IN_SRAM(p)       (((uintptr_t)(p) >> 28) == 2)
 #define RETRIES          3                            /* attempts in all */
 
 #define START_WORD       0xfffffff0u                  /* 7 idle nibbles, start */
@@ -318,6 +320,8 @@ struct rp23xx_sdio_s
   uint16_t nblocks;
   uint8_t  dir;                   /* DIR_* */
   bool     bounce;                /* through g_bounce */
+  bool     ring;                  /* through g_ring, the CPU copying */
+  bool     stalled;               /* data in lost words (its FIFO full) */
   uint8_t  attempt;
   uint8_t *rxbuf;
   const uint8_t *txbuf;
@@ -349,6 +353,7 @@ struct rp23xx_sdio_s
   DMA_HANDLE dmactrl;             /* loads the control blocks */
   DMA_HANDLE dmadata;             /* moves the data */
   DMA_HANDLE dmastat;             /* collects write status words */
+  int      ctrlch;                /* dmactrl's channel number */
 
   /* Counts */
 
@@ -400,6 +405,8 @@ static int  rp23xx_dmasendsetup(struct sdio_dev_s *dev,
                                 const uint8_t *buffer, size_t buflen);
 
 static void sdio_restart_wd(struct rp23xx_sdio_s *priv);
+static int  sdio_retry(struct rp23xx_sdio_s *priv, int ret);
+static int  sdio_tx_check(struct rp23xx_sdio_s *priv);
 
 /****************************************************************************
  * Private Data
@@ -451,6 +458,18 @@ static uint32_t g_rxcrc[2 * MAXBLOCKS];
 static uint32_t g_txtail[4 * MAXBLOCKS];
 static uint32_t g_txstat[MAXBLOCKS];
 static uint32_t g_bounce[BOUNCE_BYTES / 4];
+
+/* Blocks to or from the PSRAM go through this buffer in the SRAM, the CPU
+ * copying them out as they come in (reads) or in before they go (writes):
+ * a DMA write to the PSRAM can wait for microseconds behind the GPU link's
+ * reads, longer than the data-in FIFO lasts, and a stalled machine loses
+ * the bus's bits.  Copying behind the DMA through a smaller ring, with
+ * the clock stopped when the CPU fell behind, was tried: the PSRAM is too
+ * slow to keep up at 50 MHz, and the card did not take the clock stopping
+ * in the middle of a block.
+ */
+
+static uint32_t g_ring[RING_BLOCKS * 512 / 4] aligned_data(16);
 
 /****************************************************************************
  * Private Functions: helpers
@@ -712,6 +731,14 @@ static int sdio_stk(int rxk, int fall, int txk)
 static void sdio_cmd_restart(struct rp23xx_sdio_s *priv)
 {
   sm_reset(SM_CMD, CMD_IDLE);
+
+  /* A restart clears the output shift count, which leaves the OSR "full"
+   * of stale bits: the first command's out would take those instead of
+   * pulling.  Emptied here, the first out pulls.
+   */
+
+  sm_exec(SM_CMD, I_MOV(R_OSR, R_NULL) | SIDE(0));
+  sm_exec(SM_CMD, I_OUT(R_NULL, 32) | SIDE(0));
   sm_exec(SM_CMD, I_SET(R_PINDIRS, 0) | SIDE(0));
   sm_exec(SM_CMD, I_SET(R_PINS, 1) | SIDE(0));
   sm_exec(SM_CMD, I_JMP(C_ALWAYS, CMD_IDLE) | SIDE(0));
@@ -787,6 +814,8 @@ static void sdio_cmd_send(struct rp23xx_sdio_s *priv, uint32_t cmd,
 {
   uint32_t idx = cmd & MMCSD_CMDIDX_MASK;
   uint8_t frame[5];
+  irqstate_t flags;
+  uint32_t crc;
   uint32_t pc;
   int rxbits;
 
@@ -826,18 +855,24 @@ static void sdio_cmd_send(struct rp23xx_sdio_s *priv, uint32_t cmd,
   frame[2] = arg >> 16;
   frame[3] = arg >> 8;
   frame[4] = arg;
+  crc = (uint32_t)sdio_crc7(frame, 5) << 1;
 
   priv->cmd    = cmd;
   priv->arg    = arg;
   priv->rxbits = rxbits;
 
-  /* SM0 starts once both words are in (mov x, status: TX level < 2) */
+  /* Autopull takes the first word into the OSR as soon as it is in the
+   * FIFO; SM0 starts once the second one is there (mov x, status: TX
+   * level < 1).  Back to back, so that SM0 does not stop the clock in the
+   * middle of the command waiting for it.
+   */
 
+  flags = up_irq_save();
   putreg32((47u << 24) | ((uint32_t)rxbits << 16) |
            ((uint32_t)frame[0] << 8) | frame[1], PIO_TXF(SM_CMD));
   putreg32(((uint32_t)frame[2] << 24) | ((uint32_t)frame[3] << 16) |
-           ((uint32_t)frame[4] << 8) | (sdio_crc7(frame, 5) << 1) | 1,
-           PIO_TXF(SM_CMD));
+           ((uint32_t)frame[4] << 8) | crc | 1, PIO_TXF(SM_CMD));
+  up_irq_restore(flags);
 }
 
 /* The response, or the command sent if it has none */
@@ -1049,7 +1084,9 @@ static int sdio_rx_start(struct rp23xx_sdio_s *priv)
         {
           g_cb[2 * i].ctrl_trig      = ctrl;
           g_cb[2 * i].read_addr      = PIO_RXF(SM_RX);
-          g_cb[2 * i].write_addr     = (uintptr_t)(dst + i * bl);
+          g_cb[2 * i].write_addr     = priv->ring ?
+            (uintptr_t)g_ring + i * bl :
+            (uintptr_t)(dst + i * bl);
           g_cb[2 * i].xfer_count     = bl / 4;
           g_cb[2 * i + 1].ctrl_trig  = ctrl;
           g_cb[2 * i + 1].read_addr  = PIO_RXF(SM_RX);
@@ -1107,6 +1144,14 @@ static int sdio_rx_check(struct rp23xx_sdio_s *priv)
           if (hi != __builtin_bswap32(g_rxcrc[2 * i]) ||
               lo != __builtin_bswap32(g_rxcrc[2 * i + 1]))
             {
+              syslog(LOG_WARNING, "sdio: block %" PRIu32 "/%u CRC %08"
+                     PRIx32 "%08" PRIx32 " want %08" PRIx32 "%08" PRIx32
+                     ", %s, fifo %s\n", i, priv->nblocks,
+                     __builtin_bswap32(g_rxcrc[2 * i]),
+                     __builtin_bswap32(g_rxcrc[2 * i + 1]), hi, lo,
+                     ((uintptr_t)src >> 28) == 2 ? "sram" : "psram",
+                     (getreg32(PIO_FDEBUG) & (1 << SM_RX)) ? "stalled" :
+                                                             "ok");
               return -EIO;
             }
         }
@@ -1156,6 +1201,123 @@ static int sdio_rx_check(struct rp23xx_sdio_s *priv)
   return OK;
 }
 
+/* Block i of a write ready to go: in its ring slot if it goes through the
+ * ring, its CRCs and the words after it
+ */
+
+static void sdio_tx_fill(struct rp23xx_sdio_s *priv, uint32_t i)
+{
+  uint32_t bl = priv->blocklen;
+  const uint8_t *src = priv->bounce ? (const uint8_t *)g_bounce :
+                                      priv->txbuf;
+  const uint32_t *w = (const uint32_t *)(src + i * bl);
+  uint32_t hi;
+  uint32_t lo;
+
+  if (priv->ring)
+    {
+      uint32_t *slot = g_ring + i * (bl / 4);
+
+      memcpy(slot, src + i * bl, bl);
+      w = slot;
+    }
+
+  sdio_crc16x4(w, bl / 4, &hi, &lo);
+  g_txtail[4 * i]     = __builtin_bswap32(hi);
+  g_txtail[4 * i + 1] = __builtin_bswap32(lo);
+  g_txtail[4 * i + 2] = END_WORD;
+  g_txtail[4 * i + 3] = __builtin_bswap32(START_WORD);
+}
+
+/* The control blocks the DMA has finished: one is being done while the
+ * next has been loaded
+ */
+
+static uint32_t sdio_cbs_done(struct rp23xx_sdio_s *priv)
+{
+  uint32_t loaded = (getreg32(RP23XX_DMA_READ_ADDR(priv->ctrlch)) -
+                     (uintptr_t)g_cb) / sizeof(dma_control_block_t);
+
+  if (priv->xfer != XFER_BUSY)
+    {
+      return 2 * priv->nblocks;
+    }
+
+  return loaded > 0 ? loaded - 1 : 0;
+}
+
+/* A transfer through the ring, seen through: reads checked and copied out
+ * as their blocks come in, writes' blocks copied in ahead of the DMA
+ */
+
+static int sdio_ring_run(struct rp23xx_sdio_s *priv)
+{
+  uint32_t bl = priv->blocklen;
+  uint32_t n = priv->nblocks;
+  uint32_t limit = priv->waitms ? priv->waitms * 1000 : 1000000;
+  uint32_t start = sdio_now();
+  uint32_t i;
+
+  /* Reads: each block checked and copied out as soon as it is in, while
+   * the next ones come (writes were copied in before they started)
+   */
+
+  for (i = 0; priv->dir == DIR_RX && i < n; )
+    {
+      uint32_t *slot = g_ring + i * (bl / 4);
+      uint32_t hi;
+      uint32_t lo;
+
+      if (priv->xfer == XFER_ERROR || sdio_now() - start > limit)
+        {
+          return -ETIMEDOUT;
+        }
+
+      if (sdio_cbs_done(priv) < 2 * i + 2)
+        {
+          continue;                                  /* not in yet */
+        }
+
+      sdio_crc16x4(slot, bl / 4, &hi, &lo);
+      if (hi != __builtin_bswap32(g_rxcrc[2 * i]) ||
+          lo != __builtin_bswap32(g_rxcrc[2 * i + 1]))
+        {
+          syslog(LOG_WARNING, "sdio: block %" PRIu32 "/%" PRIu32
+                 " CRC (ring), fifo %s\n", i, n,
+                 (getreg32(PIO_FDEBUG) & (1 << SM_RX)) ? "stalled" : "ok");
+          return -EIO;
+        }
+
+      memcpy(priv->rxbuf + i * bl, slot, bl);
+      i++;
+    }
+
+  /* All copied: wait for the end (reads: the DMA's; writes: the last
+   * status word)
+   */
+
+  while (priv->xfer == XFER_BUSY)
+    {
+      if (sdio_now() - start > limit)
+        {
+          return -ETIMEDOUT;
+        }
+    }
+
+  if (priv->xfer != XFER_DONE)
+    {
+      return -ETIMEDOUT;
+    }
+
+  if (priv->dir == DIR_RX)
+    {
+      sm_disable(1 << SM_RX);
+      return OK;
+    }
+
+  return sdio_tx_check(priv);
+}
+
 /* Arm the data-out machine and its DMA: the CRCs computed first */
 
 static int sdio_tx_start(struct rp23xx_sdio_s *priv)
@@ -1170,14 +1332,7 @@ static int sdio_tx_start(struct rp23xx_sdio_s *priv)
 
   for (i = 0; i < n; i++)
     {
-      uint32_t hi;
-      uint32_t lo;
-
-      sdio_crc16x4((const uint32_t *)(src + i * bl), bl / 4, &hi, &lo);
-      g_txtail[4 * i]     = __builtin_bswap32(hi);
-      g_txtail[4 * i + 1] = __builtin_bswap32(lo);
-      g_txtail[4 * i + 2] = END_WORD;
-      g_txtail[4 * i + 3] = __builtin_bswap32(START_WORD);
+      sdio_tx_fill(priv, i);
     }
 
   ctrl = rp23xx_dma_ctrl_blk_ctrl(priv->dmactrl, RP23XX_DMA_SIZE_WORD,
@@ -1189,7 +1344,9 @@ static int sdio_tx_start(struct rp23xx_sdio_s *priv)
   for (i = 0; i < n; i++)
     {
       g_cb[2 * i].ctrl_trig      = ctrl;
-      g_cb[2 * i].read_addr      = (uintptr_t)(src + i * bl);
+      g_cb[2 * i].read_addr      = priv->ring ?
+        (uintptr_t)g_ring + i * bl :
+        (uintptr_t)(src + i * bl);
       g_cb[2 * i].write_addr     = PIO_TXF(SM_TX);
       g_cb[2 * i].xfer_count     = bl / 4;
       g_cb[2 * i + 1].ctrl_trig  = ctrl;
@@ -1341,6 +1498,7 @@ static int sdio_test_rx(struct rp23xx_sdio_s *priv, int n)
   uint16_t savebl = priv->blocklen;
   uint16_t saven = priv->nblocks;
   bool savebounce = priv->bounce;
+  bool savering = priv->ring;
   uint8_t *saverx = priv->rxbuf;
   size_t savebytes = priv->nbytes;
   uint8_t savedir = priv->dir;
@@ -1351,6 +1509,7 @@ static int sdio_test_rx(struct rp23xx_sdio_s *priv, int n)
   priv->blocklen = 64;
   priv->nblocks  = 1;
   priv->bounce   = true;
+  priv->ring     = false;
   priv->rxbuf    = buf;
   priv->nbytes   = 64;
   priv->dir      = DIR_RX;
@@ -1384,6 +1543,7 @@ static int sdio_test_rx(struct rp23xx_sdio_s *priv, int n)
   priv->blocklen = savebl;
   priv->nblocks  = saven;
   priv->bounce   = savebounce;
+  priv->ring     = savering;
   priv->rxbuf    = saverx;
   priv->nbytes   = savebytes;
   priv->dir      = savedir;
@@ -1795,7 +1955,14 @@ static int sdio_recv(struct rp23xx_sdio_s *priv, uint8_t *buffer,
       return -EINVAL;
     }
 
-  priv->bounce = !priv->widebus || ((uintptr_t)buffer & 3) != 0;
+  /* 512-byte blocks the DMA cannot take straight (in the PSRAM, or not
+   * word-aligned) go through g_ring; other small ones through g_bounce
+   */
+
+  priv->ring   = priv->widebus && bl == 512 &&
+                 (((uintptr_t)buffer & 3) != 0 || !IN_SRAM(buffer));
+  priv->bounce = !priv->ring &&
+                 (!priv->widebus || ((uintptr_t)buffer & 3) != 0);
   if (priv->bounce &&
       (priv->widebus ? nbytes > BOUNCE_BYTES - 8 :
                        priv->nblocks != 1 || bl > 64))
@@ -1837,7 +2004,9 @@ static int sdio_send(struct rp23xx_sdio_s *priv, const uint8_t *buffer,
       return -EINVAL;
     }
 
-  priv->bounce = ((uintptr_t)buffer & 3) != 0;
+  priv->ring   = bl == 512 &&
+                 (((uintptr_t)buffer & 3) != 0 || !IN_SRAM(buffer));
+  priv->bounce = !priv->ring && ((uintptr_t)buffer & 3) != 0;
   if (priv->bounce)
     {
       if (nbytes > BOUNCE_BYTES - 8)
@@ -1871,17 +2040,17 @@ static int rp23xx_dmapreflight(struct sdio_dev_s *dev,
 {
   struct rp23xx_sdio_s *priv = (struct rp23xx_sdio_s *)dev;
 
-  /* Word-aligned buffers go straight to the DMA; for others the FAT file
-   * system tries again through its own sector buffer
-   * (CONFIG_FAT_DIRECT_RETRY), which this driver bounces if it must.
+  /* Any buffer: what the DMA cannot take straight goes through g_ring or
+   * g_bounce.  -EFAULT would have the FAT file system try again through
+   * its sector buffer (CONFIG_FAT_DIRECT_RETRY).
    */
 
-  if (((uintptr_t)buffer & 3) != 0 && buflen > BOUNCE_BYTES - 8)
+  if (!priv->widebus && buflen > 64)
     {
       return -EFAULT;
     }
 
-  return priv->widebus || buflen <= 64 ? OK : -EFAULT;
+  return buflen <= RING_BLOCKS * 512 ? OK : -EFAULT;
 }
 
 static int rp23xx_cancel(struct sdio_dev_s *dev)
@@ -2109,7 +2278,18 @@ static int sdio_finish(struct rp23xx_sdio_s *priv, sdio_eventset_t ev)
       ret = -ETIMEDOUT;
     }
 
-  /* Again; the third attempt one clock step slower */
+  return sdio_retry(priv, ret);
+}
+
+/* A failed transfer started again (-EAGAIN), the third attempt one clock
+ * step slower, unless the data-in machine had only lost words to a full
+ * FIFO (the DMA held up), which a slower clock does not cure
+ */
+
+static int sdio_retry(struct rp23xx_sdio_s *priv, int ret)
+{
+  bool stalled = priv->dir == DIR_RX &&
+                 (getreg32(PIO_FDEBUG) & (1 << SM_RX)) != 0;
 
   if (priv->datacmd == 0 || priv->attempt >= RETRIES)
     {
@@ -2123,9 +2303,10 @@ static int sdio_finish(struct rp23xx_sdio_s *priv, sdio_eventset_t ev)
   priv->retries++;
   syslog(LOG_WARNING, "sdio: CMD%" PRIu32 " %08" PRIx32 " x%u: %s, "
          "again\n", priv->datacmd & MMCSD_CMDIDX_MASK, priv->dataarg,
-         priv->nblocks, ret == -ETIMEDOUT ? "timeout" : "CRC");
+         priv->nblocks, ret == -ETIMEDOUT ? "timeout" :
+                        stalled ? "CRC (FIFO full)" : "CRC");
 
-  if (priv->attempt == RETRIES && priv->div < DIV_SLOWEST)
+  if (priv->attempt == RETRIES && priv->div < DIV_SLOWEST && !stalled)
     {
       uint8_t dir = priv->dir;
 
@@ -2174,6 +2355,45 @@ static sdio_eventset_t rp23xx_eventwait(struct sdio_dev_s *dev)
       if (priv->waitevents == 0)
         {
           ev = SDIOWAIT_ERROR;
+          break;
+        }
+
+      if (priv->dir != DIR_NONE && priv->ring &&
+          (priv->waitevents & SDIOWAIT_TRANSFERDONE) != 0)
+        {
+          ret = sdio_ring_run(priv);
+          if (ret < 0)
+            {
+              if (ret == -EIO)
+                {
+                  priv->crcerrors++;
+                }
+              else
+                {
+                  priv->timeouts++;
+                }
+
+              ret = sdio_retry(priv, ret);
+              if (ret == -EAGAIN)
+                {
+                  flags = spin_lock_irqsave(&priv->lock);
+                  priv->wkupevent = 0;
+                  spin_unlock_irqrestore(&priv->lock, flags);
+                  sdio_restart_wd(priv);
+                  continue;
+                }
+
+              sdio_data_stop(priv);
+              ev = ret == -ETIMEDOUT ? SDIOWAIT_TIMEOUT : SDIOWAIT_ERROR;
+            }
+          else
+            {
+              ev = SDIOWAIT_TRANSFERDONE;
+              sm_disable((1 << SM_RX) | (1 << SM_TX));
+            }
+
+          priv->dir  = DIR_NONE;
+          priv->xfer = XFER_IDLE;
           break;
         }
 
@@ -2291,9 +2511,9 @@ struct sdio_dev_s *rp23xx_sdio_initialize(int slotno)
   priv->dmactrl = rp23xx_dmachannel();
   priv->dmadata = rp23xx_dmachannel();
   priv->dmastat = rp23xx_dmachannel();
-  putreg32(1 << ((rp23xx_dma_register(priv->dmactrl, 0) -
-                  RP23XX_DMA_BASE) / 0x40),
-           REG_CLR(RP23XX_DMA_INTE0));
+  priv->ctrlch  = (rp23xx_dma_register(priv->dmactrl, 0) -
+                   RP23XX_DMA_BASE) / 0x40;
+  putreg32(1 << priv->ctrlch, REG_CLR(RP23XX_DMA_INTE0));
 
   /* The PIO block: all its state machines but SM3 */
 
@@ -2305,7 +2525,7 @@ struct sdio_dev_s *rp23xx_sdio_initialize(int slotno)
   putreg32((VCMD << RP23XX_PIO_SM_EXECCTRL_JMP_PIN_SHIFT) |
            ((CMD_OFS + 12) << RP23XX_PIO_SM_EXECCTRL_WRAP_TOP_SHIFT) |
            (CMD_IDLE << RP23XX_PIO_SM_EXECCTRL_WRAP_BOTTOM_SHIFT) |
-           (0 << RP23XX_PIO_SM_EXECCTRL_STATUS_SEL_SHIFT) | 2,
+           (0 << RP23XX_PIO_SM_EXECCTRL_STATUS_SEL_SHIFT) | 1,
            PIO_EXECCTRL(SM_CMD));
   putreg32((1 << RP23XX_PIO_SM_PINCTRL_SIDESET_COUNT_SHIFT) |
            (1 << RP23XX_PIO_SM_PINCTRL_SET_COUNT_SHIFT) |
@@ -2393,6 +2613,98 @@ struct sdio_dev_s *rp23xx_sdio_initialize(int slotno)
   return &priv->dev;
 }
 
+#ifdef CONFIG_RP23XX_SDIO_PROBETRACE
+/* A logic analyser on SM3 (borrowing SM2's instruction space): CLK and CMD
+ * sampled ten times a clock around one command, CMD as the card saw it at
+ * each rising edge printed
+ */
+
+static void sdio_trace_cmd(struct rp23xx_sdio_s *priv, uint32_t cmd,
+                           uint32_t arg)
+{
+  static uint32_t buf[256];
+  static char line[520];
+  dma_config_t cfg;
+  uint32_t start;
+  int prev = 1;
+  int n = 0;
+  int i;
+  int j;
+
+  memset(buf, 0, sizeof(buf));
+  sm_disable(1 << 3);
+  putreg32(I_IN(R_PINS, 2), PIO_INSTR_MEM(TX_OFS));
+  putreg32(((priv->div * 6 / 10) << RP23XX_PIO_SM_CLKDIV_INT_SHIFT),
+           PIO_CLKDIV(3));
+  putreg32((TX_OFS << RP23XX_PIO_SM_EXECCTRL_WRAP_TOP_SHIFT) |
+           (TX_OFS << RP23XX_PIO_SM_EXECCTRL_WRAP_BOTTOM_SHIFT),
+           PIO_EXECCTRL(3));
+  putreg32(RP23XX_PIO_SM_SHIFTCTRL_AUTOPUSH |
+           RP23XX_PIO_SM_SHIFTCTRL_FJOIN_RX, PIO_SHIFTCTRL(3));
+  putreg32(VCLK << RP23XX_PIO_SM_PINCTRL_IN_BASE_SHIFT, PIO_PINCTRL(3));
+  sm_reset(3, TX_OFS);
+
+  cfg.dreq   = DREQ_RX(3);
+  cfg.size   = RP23XX_DMA_SIZE_WORD;
+  cfg.noincr = 0;
+  rp23xx_rxdmasetup(priv->dmastat, PIO_RXF(3), (uintptr_t)buf,
+                    sizeof(buf), cfg);
+  rp23xx_dmastart(priv->dmastat, NULL, NULL);
+  sm_enable(1 << 3);
+  sdio_cmd_send(priv, cmd, arg);
+  start = sdio_now();
+  for (i = 0; i < 24; i++)
+    {
+      uint32_t t = sdio_now();
+
+      while (sdio_now() - t < 20)
+        {
+        }
+
+      line[i] = 'a' + getreg32(PIO_ADDR(SM_CMD));
+    }
+
+  line[24] = '\0';
+  syslog(LOG_INFO, "sdio: trace pc %s ctrl %08" PRIx32 " flevel %08" PRIx32
+         " fdebug %08" PRIx32 " exec %08" PRIx32 " shift %08" PRIx32
+         " pin %08" PRIx32 "\n", line, getreg32(PIO_CTRL),
+         getreg32(PIO_REG(RP23XX_PIO_FLEVEL_OFFSET)), getreg32(PIO_FDEBUG),
+         getreg32(PIO_EXECCTRL(SM_CMD)), getreg32(PIO_SHIFTCTRL(SM_CMD)),
+         getreg32(PIO_PINCTRL(SM_CMD)));
+  while (sdio_now() - start < 20000)
+    {
+    }
+
+  sdio_cmd_restart(priv);
+  sm_disable(1 << 3);
+  rp23xx_dmastop(priv->dmastat);
+  sdio_load_tx(priv->txfall, priv->txk, priv->stk);
+
+  for (i = 0; i < 256 && n < (int)sizeof(line) - 1; i++)
+    {
+      for (j = 15; j >= 0 && n < (int)sizeof(line) - 1; j--)
+        {
+          int s = (buf[i] >> (2 * j)) & 3;
+          int clk = s & 1;
+
+          if (clk && !prev)
+            {
+              line[n++] = (s & 2) ? '0' : '1';       /* CMD is inverted */
+            }
+
+          prev = clk;
+        }
+    }
+
+  line[n] = '\0';
+  for (i = 0; i < n; i += 100)
+    {
+      syslog(LOG_INFO, "sdio: trace CMD%" PRIu32 " %.100s\n",
+             cmd & MMCSD_CMDIDX_MASK, line + i);
+    }
+}
+#endif
+
 int rp23xx_sdio_probe(struct sdio_dev_s *dev)
 {
   struct rp23xx_sdio_s *priv = (struct rp23xx_sdio_s *)dev;
@@ -2416,10 +2728,30 @@ int rp23xx_sdio_probe(struct sdio_dev_s *dev)
           return OK;
         }
 
+#ifdef CONFIG_RP23XX_SDIO_PROBETRACE
+      if (i == 0)
+        {
+          sdio_trace_cmd(priv, SD_CMD8, 0x1aa);
+        }
+#endif
+
+      if (i == 0)
+        {
+          syslog(LOG_INFO, "sdio: probe CMD8: %d (%08" PRIx32 " %08" PRIx32
+                 ", pc %" PRIu32 ")\n", ret, priv->resp[0], priv->resp[1],
+                 getreg32(PIO_ADDR(SM_CMD)));
+        }
+
       ret = sdio_cmd_r1(priv, SD_CMD55, 0, &r);
       if (ret == OK)
         {
           return OK;
+        }
+
+      if (i == 0)
+        {
+          syslog(LOG_INFO, "sdio: probe CMD55: %d (%08" PRIx32 " %08" PRIx32
+                 ")\n", ret, priv->resp[0], priv->resp[1]);
         }
     }
 
