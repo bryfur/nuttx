@@ -55,6 +55,15 @@
 #  include <nuttx/arch.h>
 #endif
 
+#ifdef CONFIG_SYSLOG_DEFAULT_CONSOLE
+#  include <fcntl.h>
+#  include <nuttx/irq.h>
+#  include <nuttx/sched.h>
+#  include <nuttx/signal.h>
+#  include <nuttx/fs/fs.h>
+#  include <nuttx/serial/serial.h>
+#endif
+
 #include "syslog.h"
 
 /****************************************************************************
@@ -66,6 +75,13 @@ static int syslog_default_putc(FAR syslog_channel_t *channel,
                                int ch);
 static ssize_t syslog_default_write(FAR syslog_channel_t *channel,
                                     FAR const char *buffer, size_t buflen);
+#  ifdef CONFIG_SYSLOG_DEFAULT_CONSOLE
+static int syslog_default_force(FAR syslog_channel_t *channel, int ch);
+static ssize_t syslog_default_write_force(FAR syslog_channel_t *channel,
+                                          FAR const char *buffer,
+                                          size_t buflen);
+static int syslog_default_flush(FAR syslog_channel_t *channel);
+#  endif
 #endif
 
 #ifdef CONFIG_SYSLOG_CDCACM
@@ -168,10 +184,24 @@ static struct syslog_channel_s g_cdcacm_channel =
 static const struct syslog_channel_ops_s g_default_channel_ops =
 {
   syslog_default_putc,
+#  ifdef CONFIG_SYSLOG_DEFAULT_CONSOLE
+  syslog_default_force,
+  syslog_default_flush,
+  syslog_default_write,
+  syslog_default_write_force
+#  else
   syslog_default_putc,
   NULL,
   syslog_default_write
+#  endif
 };
+
+#  ifdef CONFIG_SYSLOG_DEFAULT_CONSOLE
+/* /dev/console, opened by syslog_initialize() */
+
+static struct file g_default_console;
+static bool g_default_console_open;
+#  endif
 
 static syslog_channel_t g_default_channel =
 {
@@ -282,7 +312,102 @@ static bool csection_available(void)
  ****************************************************************************/
 
 #ifdef CONFIG_SYSLOG_DEFAULT
+#  ifdef CONFIG_SYSLOG_DEFAULT_CONSOLE
+/* (FPC) Can this context write through the console's serial driver?  Not
+ * before /dev/console is open, not from an interrupt handler or the IDLE
+ * loop (they may not sleep), not with interrupts masked (a spinlock or
+ * critical section holder may not sleep either; up_putc() stays the way
+ * there) and not after a panic.
+ */
+
+static bool syslog_default_console_ok(void)
+{
+  return g_default_console_open && !OSINIT_IS_PANIC() &&
+         !up_interrupt_context() && !sched_idletask() &&
+         getbasepri() == 0 && getprimask() == 0;
+}
+
 static int syslog_default_putc(FAR syslog_channel_t *channel, int ch)
+{
+  char c = ch;
+
+  if (syslog_default_console_ok() &&
+      file_write(&g_default_console, &c, 1) == 1)
+    {
+      return ch;
+    }
+
+  return syslog_default_force(channel, ch);
+}
+
+static ssize_t syslog_default_write(FAR syslog_channel_t *channel,
+                                    FAR const char *buffer, size_t buflen)
+{
+  if (syslog_default_console_ok())
+    {
+      ssize_t ret = file_write(&g_default_console, buffer, buflen);
+
+      if (ret >= 0)
+        {
+          return ret;
+        }
+    }
+
+  return syslog_default_write_force(channel, buffer, buflen);
+}
+
+/* syslog_flush(): after a panic (the other CPUs paused, interrupts off)
+ * send what the serial driver still holds, by polling, so that it comes
+ * out before the panic's own output; from a task, wait until the driver
+ * has sent it (fpc_mark() does this before its direct output).
+ */
+
+static int syslog_default_flush(FAR syslog_channel_t *channel)
+{
+  FAR uart_dev_t *dev;
+  int ms;
+
+  UNUSED(channel);
+  if (!g_default_console_open)
+    {
+      return OK;
+    }
+
+  dev = g_default_console.f_inode->i_private;
+  if (OSINIT_IS_PANIC())
+    {
+      while (dev->xmit.tail != dev->xmit.head)
+        {
+          char c = dev->xmit.buffer[dev->xmit.tail];
+
+          if (c != '\r') /* up_putc() adds one before each '\n' */
+            {
+              up_putc(c);
+            }
+
+          dev->xmit.tail = dev->xmit.tail + 1 >= dev->xmit.size ?
+                           0 : dev->xmit.tail + 1;
+        }
+    }
+  else if (syslog_default_console_ok())
+    {
+      for (ms = 0; ms < 500 && dev->xmit.tail != dev->xmit.head; ms++)
+        {
+          nxsig_usleep(1000);
+        }
+    }
+
+  return OK;
+}
+
+/* The polled output (interrupts, IDLE, interrupts masked, panic, and
+ * before /dev/console is open)
+ */
+
+static int syslog_default_force(FAR syslog_channel_t *channel, int ch)
+#  else
+static int syslog_default_putc(FAR syslog_channel_t *channel, int ch)
+#  endif
 {
 #  ifdef CONFIG_ARCH_LOWPUTC
   if (csection_available())
@@ -305,8 +430,14 @@ static int syslog_default_putc(FAR syslog_channel_t *channel, int ch)
   return ch;
 }
 
+#  ifdef CONFIG_SYSLOG_DEFAULT_CONSOLE
+static ssize_t syslog_default_write_force(FAR syslog_channel_t *channel,
+                                          FAR const char *buffer,
+                                          size_t buflen)
+#  else
 static ssize_t syslog_default_write(FAR syslog_channel_t *channel,
                                     FAR const char *buffer, size_t buflen)
+#  endif
 {
 #  ifdef CONFIG_ARCH_LOWPUTC
   if (csection_available())
@@ -354,6 +485,31 @@ static ssize_t syslog_cdcacm_write(FAR syslog_channel_t *channel,
 /****************************************************************************
  * Public Functions
  ****************************************************************************/
+
+/****************************************************************************
+ * Name: syslog_default_console_open
+ *
+ * Description:
+ *   (FPC, CONFIG_SYSLOG_DEFAULT_CONSOLE) Open /dev/console for the default
+ *   channel: from now on a task's output goes through the console's
+ *   buffered serial driver.  Called by syslog_initialize().
+ *
+ ****************************************************************************/
+
+#ifdef CONFIG_SYSLOG_DEFAULT_CONSOLE
+int syslog_default_console_open(void)
+{
+  int ret = file_open(&g_default_console, "/dev/console",
+                      O_WRONLY | O_CLOEXEC);
+
+  if (ret >= 0)
+    {
+      g_default_console_open = true;
+    }
+
+  return ret;
+}
+#endif
 
 /****************************************************************************
  * Name: syslog_channel

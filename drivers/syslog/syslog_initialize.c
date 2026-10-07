@@ -81,6 +81,12 @@ int syslog_initialize(void)
   syslog_console_channel();
 #endif
 
+#ifdef CONFIG_SYSLOG_DEFAULT_CONSOLE
+  /* The default channel: a task's output through the console's driver */
+
+  syslog_default_console_open();
+#endif
+
 #ifdef CONFIG_RAMLOG_SYSLOG
   ramlog_syslog_register();
 #endif

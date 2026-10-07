@@ -352,6 +352,23 @@ config SYSLOG_DEFAULT
 		syslog() interfaces will be present, but all output will go to the
 		up_putc(ARCH_LOWPUTC == y) or bit-bucket(ARCH_LOWPUTC == n).
 
+config SYSLOG_DEFAULT_CONSOLE
+	bool "Default SYSLOG device: tasks write through /dev/console"
+	default n
+	depends on SYSLOG_DEFAULT && ARCH_LOWPUTC && DEV_CONSOLE && ARCH_ARMV8M
+	---help---
+		(FPC) up_putc() polls the UART with the global critical section
+		held, about 87 us a character at 115200 baud once its FIFO is
+		full: a line costs milliseconds of a CPU, and of the other CPU
+		waiting for the critical section.  With this option, once
+		syslog_initialize() has opened /dev/console, output from a task
+		with interrupts enabled goes through the console's buffered,
+		interrupt-driven serial driver (the task sleeps while the buffer
+		is full).  Output from interrupt handlers, the IDLE loop, with
+		interrupts disabled (BASEPRI or PRIMASK) or after a panic still
+		goes out through up_putc(); syslog_flush() in a panic first sends
+		what the driver still holds, by polling.
+
 endif
 
 if RAMLOG_SYSLOG

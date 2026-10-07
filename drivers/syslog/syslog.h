@@ -108,6 +108,19 @@ FAR syslog_channel_t *syslog_dev_initialize(FAR const char *devpath,
 void syslog_dev_uninitialize(FAR syslog_channel_t *channel);
 
 /****************************************************************************
+ * Name: syslog_default_console_open
+ *
+ * Description:
+ *   (FPC) The default channel's tasks write through /dev/console from now
+ *   on (CONFIG_SYSLOG_DEFAULT_CONSOLE).
+ *
+ ****************************************************************************/
+
+#ifdef CONFIG_SYSLOG_DEFAULT_CONSOLE
+int syslog_default_console_open(void);
+#endif
+
+/****************************************************************************
  * Name: syslog_dev_channel
  *
  * Description:
