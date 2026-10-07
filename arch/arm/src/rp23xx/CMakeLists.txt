@@ -33,7 +33,8 @@ list(
   rp23xx_pio.c
   rp23xx_clock.c
   rp23xx_xosc.c
-  rp23xx_pll.c)
+  rp23xx_pll.c
+  rp23xx_interp.c)
 
 if(CONFIG_SMP)
   list(APPEND SRCS rp23xx_cpustart.c rp23xx_smpcall.c rp23xx_cpuidlestack.c)
