@@ -49,9 +49,12 @@
  * Description:
  *   Detect and initialise the external QSPI PSRAM on QMI chip select 1.
  *   Assigns the CS1 function to CONFIG_RP23XX_PSRAM_CS1_GPIO, reads the
- *   device ID to confirm an APS6404-family part is present, switches it to
- *   quad mode and programs the QMI M1 read/write formats so the region at
- *   RP23XX_PSRAM_BASE becomes directly addressable (and writable).
+ *   device ID (an AP Memory APS6404-family part or an ISSI IS66WVS16M8),
+ *   switches it to quad mode and programs the QMI M1 timing (the part's
+ *   own) and read/write formats so the region at RP23XX_PSRAM_BASE becomes
+ *   directly addressable (and writable).  The size is the smaller of the
+ *   ID's and an aliasing probe's.  What was found: rp23xx_psram_info()
+ *   (<arch/chip/psram.h>).
  *
  * Returned Value:
  *   The size of the detected PSRAM in bytes, or 0 if no PSRAM was found.

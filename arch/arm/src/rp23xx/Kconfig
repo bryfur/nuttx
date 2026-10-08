@@ -15,7 +15,8 @@ config RP23XX_PSRAM
 	---help---
 		Enable support for external QSPI PSRAM connected to QMI chip
 		select 1, such as the 8 MiB APS6404 fitted on the Pimoroni Pico
-		Plus 2.  The chip is detected and switched to quad mode at boot,
+		Plus 2, or a 16 MiB ISSI IS66WVS16M8 (each with its own timing).
+		The chip is detected and switched to quad mode at boot,
 		after which it is directly addressable and writable at
 		0x11000000.  Configure the chip-select pin under the Board
 		Selection menu (RP23XX_PSRAM_CS1_GPIO).
