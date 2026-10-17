@@ -666,7 +666,26 @@ int inode_search(FAR struct inode_search_s *desc, FAR struct inode **inodep)
               if (INODE_IS_SOFTLINK(inode))
                 {
                   FAR struct inode *newnode = inode;
+                  FAR char *rest;
                   int status;
+
+                  /* The rest of the path, below the link, kept apart:
+                   * _inode_linktarget() sets the descriptor up again for
+                   * the link's target, which releases the buffer that
+                   * 'name' points into (a link into a mounted volume,
+                   * /home -> /sd/home, then sent the volume a relative
+                   * path made of the target's bytes: "me" for
+                   * /home/docs/b.txt).
+                   */
+
+                  rest = lib_get_tempbuffer(PATH_MAX);
+                  if (rest == NULL)
+                    {
+                      ret = -ENOMEM;
+                      break;
+                    }
+
+                  strlcpy(rest, name, PATH_MAX);
 
                   /* If this intermediate inode in the is a soft link, then
                    * (1) recursively look-up the inode referenced by the
@@ -681,64 +700,62 @@ int inode_search(FAR struct inode_search_s *desc, FAR struct inode **inodep)
                        * does not exist.
                        */
 
+                      lib_put_tempbuffer(rest);
                       ret = status;
                       break;
                     }
-                  else
+
+                  if (newnode != inode && INODE_IS_MOUNTPT(newnode))
                     {
-                      if (newnode != inode)
+                      /* The link took us to a mountpoint: return it, the
+                       * relative path being the target's below it (set by
+                       * _inode_linktarget()) and then the rest of ours.
+                       */
+
+                      inode = newnode;
+                      above = desc->parent;
+                      left  = desc->peer;
+                      ret   = OK;
+
+                      if (*desc->relpath != '\0')
                         {
-                          /* The node was a valid symbolic link and we have
-                           * jumped to a different, spot in the pseudo file
-                           * system tree.
-                           */
+                          FAR char *buffer = lib_get_tempbuffer(PATH_MAX);
 
-                          /* Check if this took us to a mountpoint. */
-
-                          if (INODE_IS_MOUNTPT(newnode))
+                          if (buffer == NULL)
                             {
-                              /* Return the mountpoint information.
-                               * NOTE that the last path to the link target
-                               * was already set by _inode_linktarget().
-                               */
-
-                              inode   = newnode;
-                              above   = desc->parent;
-                              left    = desc->peer;
-                              ret     = OK;
-
-                              if (*desc->relpath != '\0')
-                                {
-                                  FAR char *buffer = NULL;
-
-                                  buffer = lib_get_tempbuffer(PATH_MAX);
-                                  if (buffer == NULL)
-                                    {
-                                      ret = -ENOMEM;
-                                    }
-                                  else
-                                    {
-                                      snprintf(buffer, PATH_MAX, "%s/%s",
-                                               desc->relpath, name);
-                                      lib_put_tempbuffer(desc->buffer);
-                                      desc->buffer = buffer;
-                                      relpath = buffer;
-                                      ret = OK;
-                                    }
-                                }
-                              else
-                                {
-                                  relpath = name;
-                                }
-
+                              lib_put_tempbuffer(rest);
+                              ret = -ENOMEM;
                               break;
                             }
 
-                          /* Continue from this new inode. */
-
-                          inode = newnode;
+                          snprintf(buffer, PATH_MAX, "%s/%s", desc->relpath,
+                                   rest);
+                          lib_put_tempbuffer(rest);
+                          rest = buffer;
                         }
+
+                      if (desc->buffer != NULL)
+                        {
+                          lib_put_tempbuffer(desc->buffer);
+                        }
+
+                      desc->buffer = rest;
+                      relpath = rest;
+                      break;
                     }
+
+                  /* Continue from the link's target (another node of the
+                   * pseudo file system) with the rest of the path
+                   */
+
+                  if (desc->buffer != NULL)
+                    {
+                      lib_put_tempbuffer(desc->buffer);
+                    }
+
+                  desc->buffer = rest;
+                  name = rest;
+                  inode = newnode;
                 }
 #endif
 
