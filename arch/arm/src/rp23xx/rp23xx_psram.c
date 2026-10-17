@@ -72,7 +72,7 @@
  */
 
 #define RP23XX_PSRAM_RAMFUNC \
-  __attribute__((section(".time_critical.rp23xx_psram"), noinline))
+  locate_code(".time_critical.rp23xx_psram") noinline_function
 
 /* GPIO function select for the XIP chip-select-1 line (PSRAM). */
 

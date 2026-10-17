@@ -49,7 +49,9 @@
 
 #define RP23XX_ATOMIC_SPINLOCK  RP23XX_SIO_SPINLOCK(31)
 
-#define ATOMIC_FAST  __attribute__((section(".time_critical.atomic")))
+/* In the SRAM (the board copies .time_critical there at boot) */
+
+#define ATOMIC_FAST  locate_code(".time_critical.atomic")
 
 /****************************************************************************
  * Private Functions

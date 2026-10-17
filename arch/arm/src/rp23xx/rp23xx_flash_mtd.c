@@ -124,7 +124,7 @@
  */
 
 #define RAM_CODE(name) \
-  __attribute__((noinline, section(".time_critical." #name))) name
+  locate_code(".time_critical." #name) noinline_function name
 
 /****************************************************************************
  * Private Types
