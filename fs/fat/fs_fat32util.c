@@ -1867,6 +1867,13 @@ int fat_fscacheread(struct fat_mountpt_s *fs, off_t sector)
           return ret;
         }
 
+      /* The buffer holds no sector while it is read into: a read that
+       * fails (a DMA straight into the buffer, its CRC checked after)
+       * must not leave other bytes under the old sector's tag
+       */
+
+      fs->fs_currentsector = (off_t)-1;
+
       /* Then read the specified sector into the cache */
 
       ret = fat_hwread(fs, fs->fs_buffer, sector, 1);
@@ -1949,6 +1956,10 @@ int fat_ffcacheread(struct fat_mountpt_s *fs, struct fat_file_s *ff,
         {
           return ret;
         }
+
+      /* Not valid while it is read into (as fs_buffer above) */
+
+      ff->ff_bflags &= ~FFBUFF_VALID;
 
       /* Then read the specified sector into the cache */
 
