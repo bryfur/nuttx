@@ -98,7 +98,8 @@ int board_spisd_initialize(int minor, int bus)
 
   /* Mount filesystem */
 
-  ret = nx_mount("/dev/mmcsd0", "/mnt/sd0", "vfat", 0, NULL);
+  ret = nx_mount("/dev/mmcsd0", CONFIG_RP23XX_SPISD_MOUNTPOINT, "vfat", 0,
+                 NULL);
   if (ret < 0)
     {
       _err("ERROR: Failed to mount the SDCARD. %d\n", ret);

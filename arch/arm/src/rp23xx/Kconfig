@@ -898,6 +898,12 @@ config RP23XX_SPISD_SPI_CH
 	---help---
 		Select spi channel number to use spi sd card.
 
+config RP23XX_SPISD_MOUNTPOINT
+	string "Mount point"
+	default "/mnt/sd0"
+	---help---
+		Where the card's FAT file system is mounted.
+
 endif # SPISD Configuration
 
 #####################################################################
