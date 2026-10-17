@@ -134,12 +134,24 @@ int nxsched_smp_call_handler(int irq, FAR void *context,
 
       if (data->cookie != NULL)
         {
+          FAR struct smp_call_cookie_s *cookie = data->cookie;
+
           if (ret < 0)
             {
-              data->cookie->error = ret;
+              cookie->error = ret;
             }
 
-          nxsem_post(&data->cookie->sem);
+          /* Posted with g_smp_call_lock dropped: waking the waiter takes
+           * the critical section (nxsem_post_slow()), and a CPU holding
+           * the critical section may be spinning on g_smp_call_lock in
+           * nxsched_smp_call_add() (the tick's round robin, a signal): both
+           * CPUs would wait for each other.  The cookie is the waiter's
+           * until it is posted; data is not touched after this.
+           */
+
+          spin_unlock_irqrestore(&g_smp_call_lock, flags);
+          nxsem_post(&cookie->sem);
+          flags = spin_lock_irqsave(&g_smp_call_lock);
         }
     }
 
