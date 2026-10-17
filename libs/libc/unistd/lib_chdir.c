@@ -31,6 +31,8 @@
 #include <unistd.h>
 #include <errno.h>
 
+#include <nuttx/lib/lib.h>
+
 #include "libc.h"
 
 /****************************************************************************
@@ -97,10 +99,15 @@ int chdir(FAR const char *path)
    * Remove any trailing '/' characters from the path
    */
 
+  /* The absolute path, "." and ".." taken out but links kept: getcwd()
+   * then names a folder reached through a link (/home -> /sd/home) by the
+   * path it was reached by, as a shell's logical $PWD does
+   */
+
   abspath = lib_get_pathbuffer();
   if (abspath != NULL)
     {
-      oldpwd = realpath(path, abspath);
+      oldpwd = lib_realpath(path, abspath, true);
     }
 
   if (abspath == NULL || oldpwd == NULL)
