@@ -884,7 +884,10 @@ int nx_runinstance(FAR const char *mqname, FAR NX_DRIVERTYPE *dev)
                                NX_CAP_COMPOSITOR |
                                ((g_nxaccel->flags & NX_ACCEL_BC1) != 0 ?
                                 NX_CAP_BC1 : 0) |
-                               (g_nxaccel->quad != NULL ? NX_CAP_QUAD : 0);
+                               (g_nxaccel->quad != NULL ? NX_CAP_QUAD : 0) |
+                               (g_nxaccel->waitline != NULL &&
+                                g_nxaccel->waitline(-1, 0) == 0 ?
+                                NX_CAP_RACE : 0);
               compmsg->size->w = nxmu.be.vinfo.xres;
               compmsg->size->h = nxmu.be.vinfo.yres;
               nxsem_post(compmsg->sem_done);

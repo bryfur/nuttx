@@ -99,6 +99,9 @@
                                         * NXBE_WINDOW_IMAGE) */
 #define NX_CAP_QUAD            0x04    /* Shows windows in perspective
                                         * (NX_FX_QUAD) */
+#define NX_CAP_RACE            0x08    /* Can draw single buffered frames
+                                        * behind the beam (nx_accel_s
+                                        * waitline: nxbe_compose_race()) */
 
 /* nx_gpuop_s op */
 
