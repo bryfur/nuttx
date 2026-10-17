@@ -194,6 +194,7 @@ int load_module(FAR struct binary_s *bin, FAR const char *filename,
         {
           FAR char *fullpath;
           ENVPATH_HANDLE handle;
+          int found = -ENOENT;
 
           ret = -ENOENT;
 
@@ -222,17 +223,32 @@ int load_module(FAR struct binary_s *bin, FAR const char *filename,
                   lib_free(fullpath);
 #endif
 
-                  /* Break out of the loop with ret == OK on success */
+                  /* Break out of the loop with ret == OK on success.  A
+                   * program that is there but does not load (ENOEXEC: built
+                   * for another firmware) is what fails, not the folders
+                   * after it in PATH, which do not have it (ENOENT): its
+                   * error is kept
+                   */
 
                   if (ret == OK)
                     {
                       break;
+                    }
+
+                  if (ret != -ENOENT && found == -ENOENT)
+                    {
+                      found = ret;
                     }
                 }
 
               /* Release the traversal handle */
 
               envpath_release(handle);
+            }
+
+          if (ret != OK && found != -ENOENT)
+            {
+              ret = found;
             }
         }
       else

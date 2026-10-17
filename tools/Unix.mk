@@ -507,6 +507,7 @@ clean_context: clean_dirlinks
 	done
 	$(call DELFILE, include/nuttx/config.h)
 	$(call DELFILE, include/nuttx/version.h)
+	$(call DELFILE, include/nuttx/elf_abi.h)
 	$(call DELFILE, include/float.h)
 	$(call DELFILE, include/math.h)
 	$(call DELFILE, include/stdarg.h)

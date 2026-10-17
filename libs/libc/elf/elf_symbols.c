@@ -30,6 +30,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <syslog.h>
 #include <errno.h>
 #include <nuttx/debug.h>
 
@@ -48,6 +49,17 @@
 
 #define SYM_NOT_FOUND 0
 #define SYM_FOUND     1
+
+#ifdef CONFIG_LIBC_ELF_ABI_STAMP
+#  include <nuttx/elf_abi.h>
+
+/* This firmware build's module ABI (include/nuttx/elf_abi.h): every module
+ * of the same build imports this symbol (crt0), so the firmware's symbol
+ * table exports it
+ */
+
+const char ELF_ABI_SYM = 0;
+#endif
 
 /****************************************************************************
  * Private Types
@@ -444,13 +456,30 @@ int libelf_symvalue(FAR struct module_s *modp,
                                          nexports);
             }
 
-          /* Was the symbol found from any exporter? */
+          /* Was the symbol found from any exporter?  If not, say so
+           * whatever the debug options (a program built for another
+           * firmware fails here), and fail with ENOEXEC: not ENOENT, which
+           * the shell takes for "no such program"
+           */
 
           if (symbol == NULL)
             {
-              berr("ERROR: SHN_UNDEF: Exported symbol \"%s\" not found\n",
-                   loadinfo->iobuffer);
-              return -ENOENT;
+#ifdef CONFIG_LIBC_ELF_ABI_STAMP
+              if (strncmp(exportinfo.name, "__elf_abi_", 10) == 0)
+                {
+                  syslog(LOG_ERR, "elf: built by another firmware build "
+                         "(module ABI %s, this firmware's %s): install "
+                         "the programs of this firmware's build\n",
+                         exportinfo.name + 10, ELF_ABI_STR);
+                }
+              else
+#endif
+                {
+                  syslog(LOG_ERR, "elf: needs \"%s\", which this "
+                         "firmware does not export\n", exportinfo.name);
+                }
+
+              return -ENOEXEC;
             }
 
           /* Yes... add the exported symbol value to the ELF symbol tablei

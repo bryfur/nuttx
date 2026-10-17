@@ -12,6 +12,19 @@ config LIBC_ELF
 menu "Module library configuration"
 	depends on LIBC_ELF
 
+config LIBC_ELF_ABI_STAMP
+	bool "Modules carry their firmware build's ABI id"
+	default n
+	---help---
+		The board's build makes include/nuttx/elf_abi.h, the id of the
+		module ABI this build has (ELF_ABI_ID, ELF_ABI_STR, ELF_ABI_SYM:
+		boards/fpc-cpu/scripts/abi.sh hashes the configuration, the
+		compiler and the headers modules compile against).  crt0 makes
+		every module import ELF_ABI_SYM, which only a firmware of the
+		same ABI exports, and the loader says when a module was built for
+		another ("install the programs of this firmware's build") instead
+		of failing on whatever symbol happens to differ.
+
 config LIBC_ELF_MAXDEPEND
 	int "Max dependencies"
 	default 2

@@ -181,6 +181,12 @@ $(COBJS) $(UCOBJS): %$(OBJEXT): %.c
 $(STARTUP_OBJS): %$(OBJEXT): %.c
 	$(Q) $(CC) $(CELFFLAGS) -c common$(DELIM)crt0.c -o crt0$(OBJEXT)
 
+# A new module ABI id (the board's build rewrites the header when it
+# changes) is a new crt0
+ifeq ($(CONFIG_LIBC_ELF_ABI_STAMP),y)
+$(STARTUP_OBJS): $(TOPDIR)$(DELIM)include$(DELIM)nuttx$(DELIM)elf_abi.h
+endif
+
 ifeq ($(CONFIG_BUILD_FLAT),y)
 $(BIN): $(STARTUP_OBJS) $(OBJS)
 	$(call ARCHIVE_REBUILD, $@, $(OBJS))

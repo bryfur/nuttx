@@ -51,6 +51,20 @@ extern initializer_t _edtors[];
 
 int main(int argc, char *argv[]);
 
+#ifdef CONFIG_LIBC_ELF_ABI_STAMP
+/* The module ABI of the firmware build this module comes from
+ * (include/nuttx/elf_abi.h, made by the board's build): a reference to the
+ * symbol only a firmware of that ABI exports, so that loading the module
+ * elsewhere fails, saying why (libs/libc/elf/elf_symbols.c)
+ */
+
+#  include <nuttx/compiler.h>
+#  include <nuttx/elf_abi.h>
+
+extern const char ELF_ABI_SYM;
+static const char *const g_elf_abi used_data = &ELF_ABI_SYM;
+#endif
+
 /****************************************************************************
  * Private Functions
  ****************************************************************************/
