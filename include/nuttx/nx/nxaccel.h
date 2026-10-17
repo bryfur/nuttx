@@ -102,6 +102,8 @@ struct nx_quadpart_s
   nxgl_coord_t fh;
   nxgl_coord_t bx;                     /* The display pixel every part is */
   nxgl_coord_t by;                     /* drawn relative to */
+  int32_t fx[4];                       /* The whole image's corners (as */
+  int32_t fy[4];                       /* quad()'s x, y): its own edges */
 };
 
 /* Display operations done by the display hardware (a GPU) instead of by
@@ -278,8 +280,10 @@ struct nx_accel_s
    * none) says the image is a part of a larger one drawn in parts (a
    * window's surface in pieces): its corners are the ones cut, and all
    * parts are drawn relative to the same point, so that they meet
-   * without a seam and look the same wherever they are drawn.  For
-   * NX_FX_QUAD (nxcompose.h)
+   * without a seam and look the same wherever they are drawn; with the
+   * whole image's corners (fx, fy), a part's pixels on the image's border
+   * and its texels are the ones the whole image drawn at once would have,
+   * however it is cut into parts.  For NX_FX_QUAD (nxcompose.h)
    */
 
   CODE void (*quad)(FAR const struct nxgl_point_s *src, nxgl_coord_t w,

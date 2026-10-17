@@ -1342,6 +1342,12 @@ static void comp_quadimg(FAR const struct nxbe_piece_s *p, int n,
   part.fh = h;
   part.bx = bx16 >> 4;
   part.by = by16 >> 4;
+  for (k = 0; k < 4; k++)
+    {
+      part.fx[k] = x[k];                  /* The window's own corners */
+      part.fy[k] = y[k];
+    }
+
   if (n == 1 && p[0].r.pt1.x == 0 && p[0].r.pt1.y == 0 &&
       p[0].r.pt2.x == w - 1 && p[0].r.pt2.y == h - 1)
     {
@@ -1399,16 +1405,14 @@ static void comp_quadimg(FAR const struct nxbe_piece_s *p, int n,
             }
         }
 
-      /* (Its round corners only for a piece that reaches into one: the
-       * same rows, without looking for them)
+      /* (The window's round corners for every piece: a piece's rows are
+       * the window's rows, round corners and all, cut to the piece)
        */
 
       part.ox = p[k].r.pt1.x;
       part.oy = p[k].r.pt1.y;
       g_nxaccel->quad(&p[k].pos, pu[1] - pu[0], pv[2] - pv[0], qx, qy,
-                      (pu[0] < radius || pu[1] > w - radius) &&
-                      (pv[0] < radius || pv[2] > h - radius) ? radius : 0,
-                      &part, dest);
+                      radius, &part, dest);
     }
 }
 
