@@ -12,6 +12,16 @@ config FS_TMPFS
 
 if FS_TMPFS
 
+config FS_TMPFS_USER_HEAP
+	bool "Files from the user heap"
+	default n
+	depends on !BUILD_KERNEL
+	---help---
+		The file system's objects and files' data from the user heap
+		(malloc) rather than the kernel heap: on boards whose kernel heap
+		is a small internal SRAM and whose user heap is a large external
+		RAM, so that files in a tmpfs do not take the kernel's memory.
+
 config FS_TMPFS_BLOCKSIZE
 	int "Reported block size"
 	default 512

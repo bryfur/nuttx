@@ -58,6 +58,20 @@
 #  warning CONFIG_FS_TMPFS_FILE_FREEGUARD needs to be > ALLOCGUARD
 #endif
 
+/* Where the objects and the files' data come from */
+
+#ifdef CONFIG_FS_TMPFS_USER_HEAP
+#  define tmpfs_heap_zalloc   kumm_zalloc
+#  define tmpfs_heap_realloc  kumm_realloc
+#  define tmpfs_heap_free     kumm_free
+#  define tmpfs_heap_strndup  strndup
+#else
+#  define tmpfs_heap_zalloc   fs_heap_zalloc
+#  define tmpfs_heap_realloc  fs_heap_realloc
+#  define tmpfs_heap_free     fs_heap_free
+#  define tmpfs_heap_strndup  fs_heap_strndup
+#endif
+
 #define tmpfs_lock(fs) \
            nxrmutex_lock(&fs->tfs_lock)
 #define tmpfs_lock_object(to) \
@@ -268,7 +282,7 @@ static int tmpfs_realloc_directory(FAR struct tmpfs_directory_s *tdo,
 
   /* Realloc the directory object */
 
-  newentry = fs_heap_realloc(tdo->tdo_entry, objsize);
+  newentry = tmpfs_heap_realloc(tdo->tdo_entry, objsize);
   if (newentry == NULL)
     {
       return -ENOMEM;
@@ -308,7 +322,7 @@ static int tmpfs_realloc_file(FAR struct tmpfs_file_s *tfo,
         {
           /* Free the file object */
 
-          fs_heap_free(tfo->tfo_data);
+          tmpfs_heap_free(tfo->tfo_data);
           tfo->tfo_data = NULL;
           tfo->tfo_alloc = 0;
           tfo->tfo_size = 0;
@@ -349,7 +363,7 @@ static int tmpfs_realloc_file(FAR struct tmpfs_file_s *tfo,
 
   /* Realloc the file object */
 
-  newdata = fs_heap_realloc(tfo->tfo_data, allocsize);
+  newdata = tmpfs_heap_realloc(tfo->tfo_data, allocsize);
   if (newdata == NULL)
     {
       return -ENOMEM;
@@ -400,8 +414,8 @@ static void tmpfs_release_lockedfile(FAR struct tmpfs_file_s *tfo)
     {
       tmpfs_unlock_file(tfo);
       nxrmutex_destroy(&tfo->tfo_lock);
-      fs_heap_free(tfo->tfo_data);
-      fs_heap_free(tfo);
+      tmpfs_heap_free(tfo->tfo_data);
+      tmpfs_heap_free(tfo);
     }
 
   /* Otherwise, just decrement the reference count on the file object */
@@ -493,7 +507,7 @@ static int tmpfs_remove_dirent(FAR struct tmpfs_directory_s *tdo,
 
   if (tdo->tdo_entry[index].tde_name != NULL)
     {
-      fs_heap_free(tdo->tdo_entry[index].tde_name);
+      tmpfs_heap_free(tdo->tdo_entry[index].tde_name);
     }
 
   /* Remove by replacing this entry with the final directory entry */
@@ -543,7 +557,7 @@ static int tmpfs_add_dirent(FAR struct tmpfs_directory_s *tdo,
         }
     }
 
-  newname = fs_heap_strndup(name, namelen);
+  newname = tmpfs_heap_strndup(name, namelen);
   if (newname == NULL)
     {
       return -ENOMEM;
@@ -558,7 +572,7 @@ static int tmpfs_add_dirent(FAR struct tmpfs_directory_s *tdo,
   index = tmpfs_realloc_directory(tdo, nentries);
   if (index < 0)
     {
-      fs_heap_free(newname);
+      tmpfs_heap_free(newname);
       return index;
     }
 
@@ -733,7 +747,7 @@ tmpfs_alloc_file(FAR struct tmpfs_directory_s *parent, mode_t mode)
 
   /* Create a new zero length file object */
 
-  tfo = fs_heap_zalloc(sizeof(*tfo));
+  tfo = tmpfs_heap_zalloc(sizeof(*tfo));
   if (tfo == NULL)
     {
       return NULL;
@@ -872,7 +886,7 @@ static int tmpfs_create_file(FAR struct tmpfs_s *fs,
 
 errout_with_file:
   nxrmutex_destroy(&newtfo->tfo_lock);
-  fs_heap_free(newtfo);
+  tmpfs_heap_free(newtfo);
 
 errout_with_parent:
   parent->tdo_refs--;
@@ -891,7 +905,7 @@ tmpfs_alloc_directory(FAR struct tmpfs_directory_s *parent, mode_t mode)
 
   /* Create a new zero length directory object */
 
-  tdo = fs_heap_zalloc(sizeof(*tdo));
+  tdo = tmpfs_heap_zalloc(sizeof(*tdo));
   if (tdo == NULL)
     {
       return NULL;
@@ -1031,7 +1045,7 @@ static int tmpfs_create_directory(FAR struct tmpfs_s *fs,
 
 errout_with_directory:
   nxrmutex_destroy(&newtdo->tdo_lock);
-  fs_heap_free(newtdo);
+  tmpfs_heap_free(newtdo);
 
 errout_with_parent:
   parent->tdo_refs--;
@@ -1408,7 +1422,7 @@ static int tmpfs_free_callout(FAR struct tmpfs_directory_s *tdo,
 
   if (tdo->tdo_entry[index].tde_name != NULL)
     {
-      fs_heap_free(tdo->tdo_entry[index].tde_name);
+      tmpfs_heap_free(tdo->tdo_entry[index].tde_name);
     }
 
   /* Remove by replacing this entry with the final directory entry */
@@ -1444,19 +1458,19 @@ static int tmpfs_free_callout(FAR struct tmpfs_directory_s *tdo,
           return TMPFS_UNLINKED;
         }
 
-      fs_heap_free(tfo->tfo_data);
+      tmpfs_heap_free(tfo->tfo_data);
     }
   else /* if (to->to_type == TMPFS_DIRECTORY) */
     {
       tdo = (FAR struct tmpfs_directory_s *)to;
 
-      fs_heap_free(tdo->tdo_entry);
+      tmpfs_heap_free(tdo->tdo_entry);
     }
 
   /* Free the object now */
 
   nxrmutex_destroy(&to->to_lock);
-  fs_heap_free(to);
+  tmpfs_heap_free(to);
   return TMPFS_DELETED;
 }
 
@@ -2246,7 +2260,7 @@ static int tmpfs_opendir(FAR struct inode *mountpt, FAR const char *relpath,
   fs = mountpt->i_private;
   DEBUGASSERT(fs != NULL && fs->tfs_root.tde_object != NULL);
 
-  tdir = fs_heap_zalloc(sizeof(*tdir));
+  tdir = tmpfs_heap_zalloc(sizeof(*tdir));
   if (tdir == NULL)
     {
       return -ENOMEM;
@@ -2257,7 +2271,7 @@ static int tmpfs_opendir(FAR struct inode *mountpt, FAR const char *relpath,
   ret = tmpfs_lock(fs);
   if (ret < 0)
     {
-      fs_heap_free(tdir);
+      tmpfs_heap_free(tdir);
       return ret;
     }
 
@@ -2293,7 +2307,7 @@ static int tmpfs_opendir(FAR struct inode *mountpt, FAR const char *relpath,
   tmpfs_unlock(fs);
   if (ret < 0)
     {
-      fs_heap_free(tdir);
+      tmpfs_heap_free(tdir);
     }
 
   return ret;
@@ -2321,7 +2335,7 @@ static int tmpfs_closedir(FAR struct inode *mountpt,
   tmpfs_lock_directory(tdo);
   tdo->tdo_refs--;
   tmpfs_unlock_directory(tdo);
-  fs_heap_free(dir);
+  tmpfs_heap_free(dir);
   return OK;
 }
 
@@ -2439,7 +2453,7 @@ static int tmpfs_bind(FAR struct inode *blkdriver, FAR const void *data,
 
   /* Create an instance of the tmpfs file system */
 
-  fs = fs_heap_zalloc(sizeof(struct tmpfs_s));
+  fs = tmpfs_heap_zalloc(sizeof(struct tmpfs_s));
   if (fs == NULL)
     {
       return -ENOMEM;
@@ -2452,7 +2466,7 @@ static int tmpfs_bind(FAR struct inode *blkdriver, FAR const void *data,
   tdo = tmpfs_alloc_directory(NULL, 0777);
   if (tdo == NULL)
     {
-      fs_heap_free(fs);
+      tmpfs_heap_free(fs);
       return -ENOMEM;
     }
 
@@ -2500,11 +2514,11 @@ static int tmpfs_unbind(FAR void *handle, FAR struct inode **blkdriver,
   /* Now we can destroy the root file system and the file system itself. */
 
   nxrmutex_destroy(&tdo->tdo_lock);
-  fs_heap_free(tdo->tdo_entry);
-  fs_heap_free(tdo);
+  tmpfs_heap_free(tdo->tdo_entry);
+  tmpfs_heap_free(tdo);
 
   nxrmutex_destroy(&fs->tfs_lock);
-  fs_heap_free(fs);
+  tmpfs_heap_free(fs);
   return ret;
 }
 
@@ -2667,8 +2681,8 @@ static int tmpfs_unlink(FAR struct inode *mountpt, FAR const char *relpath)
   else
     {
       nxrmutex_destroy(&tfo->tfo_lock);
-      fs_heap_free(tfo->tfo_data);
-      fs_heap_free(tfo);
+      tmpfs_heap_free(tfo->tfo_data);
+      tmpfs_heap_free(tfo);
     }
 
   /* Release the reference and lock on the parent directory */
@@ -2809,8 +2823,8 @@ static int tmpfs_rmdir(FAR struct inode *mountpt, FAR const char *relpath)
   /* Free the directory object */
 
   nxrmutex_destroy(&tdo->tdo_lock);
-  fs_heap_free(tdo->tdo_entry);
-  fs_heap_free(tdo);
+  tmpfs_heap_free(tdo->tdo_entry);
+  tmpfs_heap_free(tdo);
 
   /* Release the reference and lock on the parent directory */
 
