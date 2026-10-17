@@ -454,6 +454,17 @@ int libelf_symvalue(FAR struct module_s *modp,
             {
               symbol = symtab_findbyname(exports, exportinfo.name,
                                          nexports);
+
+              /* An entry whose value is 0 names a function the table
+               * refers to weakly that this firmware does not define (the
+               * FPC's export table: what the exported headers declare,
+               * apps/tools/mksymtab.sh -w): not exported
+               */
+
+              if (symbol != NULL && symbol->sym_value == NULL)
+                {
+                  symbol = NULL;
+                }
             }
 
           /* Was the symbol found from any exporter?  If not, say so
