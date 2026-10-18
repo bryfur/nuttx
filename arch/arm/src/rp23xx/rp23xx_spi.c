@@ -38,6 +38,7 @@
 #include <arch/board/board.h>
 #include <nuttx/irq.h>
 #include <nuttx/arch.h>
+#include <nuttx/clock.h>
 #include <nuttx/mutex.h>
 #include <nuttx/spi/spi.h>
 
@@ -115,7 +116,7 @@ static void spi_dmatxsetup(struct rp23xx_spidev_s *priv,
                            const void *txbuffer, size_t nwords);
 static void spi_dmarxsetup(struct rp23xx_spidev_s *priv,
                            const void *rxbuffer, size_t nwords);
-static void spi_dmatrxwait(struct rp23xx_spidev_s *priv);
+static void spi_dmatrxwait(struct rp23xx_spidev_s *priv, size_t nwords);
 #ifndef CONFIG_SPI_EXCHANGE
 static void spi_dmasndblock(struct spi_dev_s *dev,
                             const void *buffer, size_t nwords);
@@ -1042,7 +1043,7 @@ static void spi_dmaexchange(struct spi_dev_s *dev,
 
   /* Then wait for each to complete */
 
-  spi_dmatrxwait(priv);
+  spi_dmatrxwait(priv, nwords);
 }
 
 #ifndef CONFIG_SPI_EXCHANGE
@@ -1158,6 +1159,7 @@ static void spi_dmatxsetup(struct rp23xx_spidev_s *priv,
 
   rp23xx_txdmasetup(priv->txdmach, (uintptr_t)dst, (uintptr_t)txbuffer,
                    nwords << priv->txconfig.size, priv->txconfig);
+  rp23xx_dmahighpri(priv->txdmach);
 }
 
 /****************************************************************************
@@ -1198,6 +1200,7 @@ static void spi_dmarxsetup(struct rp23xx_spidev_s *priv,
 
   rp23xx_rxdmasetup(priv->rxdmach, (uintptr_t)src, (uintptr_t)rxbuffer,
                    nwords << priv->rxconfig.size, priv->rxconfig);
+  rp23xx_dmahighpri(priv->rxdmach);
 }
 
 /****************************************************************************
@@ -1208,22 +1211,71 @@ static void spi_dmarxsetup(struct rp23xx_spidev_s *priv,
  *
  ****************************************************************************/
 
-static void spi_dmatrxwait(struct rp23xx_spidev_s *priv)
+static void spi_dmarecover(struct rp23xx_spidev_s *priv)
 {
-  uint32_t val;
+  int n;
 
-  if (nxsem_wait_uninterruptible(&priv->dmasem) != OK)
-    {
-      spierr("dma error\n");
-    }
-
-  if (nxsem_wait_uninterruptible(&priv->dmasem) != OK)
-    {
-      spierr("dma error\n");
-    }
+  /* Both channels stopped first (the callbacks are forgotten with them),
+   * then whatever is still in the FIFOs and the overrun flag, then the
+   * semaphore back to 0 for the next exchange.
+   */
 
   rp23xx_dmastop(priv->txdmach);
   rp23xx_dmastop(priv->rxdmach);
+
+  for (n = 0; n < 1000 &&
+       (spi_getreg(priv, RP23XX_SPI_SSPSR_OFFSET) & RP23XX_SPI_SSPSR_BSY);
+       n++)
+    {
+    }
+
+  while (spi_getreg(priv, RP23XX_SPI_SSPSR_OFFSET) & RP23XX_SPI_SSPSR_RNE)
+    {
+      spi_getreg(priv, RP23XX_SPI_SSPDR_OFFSET);
+    }
+
+  spi_putreg(priv, RP23XX_SPI_SSPICR_OFFSET, RP23XX_SPI_SSPICR_RORIC);
+  nxsem_reset(&priv->dmasem, 0);
+}
+
+static void spi_dmatrxwait(struct rp23xx_spidev_s *priv, size_t nwords)
+{
+  uint32_t freq = priv->actual ? priv->actual : 400000;
+  uint32_t ms;
+  uint32_t val;
+  int i;
+
+  /* Never forever: a receive overrun (the RX channel held up behind slow
+   * PSRAM transfers, 2026-10-18) drops a byte, and the RX channel then
+   * waits for the last one for good.  Twice the transfer's own time and
+   * 20 ms more; then both channels are stopped and the FIFOs emptied.  The
+   * data received is wrong then: the caller's framing (CRCs) must notice.
+   */
+
+  ms = 20 + (uint32_t)(((uint64_t)nwords * 16 * 1000 + freq - 1) / freq);
+
+  for (i = 0; i < 2; i++)
+    {
+      if (nxsem_tickwait_uninterruptible(&priv->dmasem, MSEC2TICK(ms)) < 0)
+        {
+          spierr("SPI%d: DMA exchange of %zu timed out (RIS %08lx): "
+                 "reset\n", priv->port, nwords,
+                 (unsigned long)spi_getreg(priv, RP23XX_SPI_SSPRIS_OFFSET));
+          spi_dmarecover(priv);
+          break;
+        }
+    }
+
+  if (i == 2)
+    {
+      rp23xx_dmastop(priv->txdmach);
+      rp23xx_dmastop(priv->rxdmach);
+      if (spi_getreg(priv, RP23XX_SPI_SSPRIS_OFFSET) &
+          RP23XX_SPI_SSPRIS_RORRIS)
+        {
+          spi_putreg(priv, RP23XX_SPI_SSPICR_OFFSET, RP23XX_SPI_SSPICR_RORIC);
+        }
+    }
 
   val = spi_getreg(priv, RP23XX_SPI_SSPDMACR_OFFSET);
   val &= ~(RP23XX_SPI_SSPDMACR_RXDMAE | RP23XX_SPI_SSPDMACR_TXDMAE);

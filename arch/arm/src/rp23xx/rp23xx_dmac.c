@@ -571,6 +571,22 @@ void rp23xx_dmastart(DMA_HANDLE handle, dma_callback_t callback, void *arg)
 }
 
 /****************************************************************************
+ * Name: rp23xx_dmahighpri
+ ****************************************************************************/
+
+void rp23xx_dmahighpri(DMA_HANDLE handle)
+{
+  struct dma_channel_s *dmach = (struct dma_channel_s *)handle;
+
+  DEBUGASSERT(dmach != NULL && dmach->inuse);
+
+  /* Through AL1_CTRL, which does not trigger the channel */
+
+  setbits_reg32(RP23XX_DMA_CTRL_TRIG_HIGH_PRIORITY,
+                RP23XX_DMA_AL1_CTRL(dmach->chan));
+}
+
+/****************************************************************************
  * Name: rp23xx_dmastop
  *
  * Description:

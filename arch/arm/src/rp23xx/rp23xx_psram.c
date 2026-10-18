@@ -570,6 +570,19 @@ rp23xx_psramconfig(void)
         {
           size = g_psram_info.id_size;
         }
+
+      /* A board without flash runs from a second PSRAM on CS0 (the same
+       * part: docs/psram-boot.md in the fpc tree), left by its loader at a
+       * timing safe at any clock: now the clock is up, the part's own.
+       * Its contents are the image: no commands, only the timing.
+       */
+
+      if ((getreg32(RP23XX_XIP_CTRL_BASE) & RP23XX_XIP_CTRL_WRITABLE_M0)
+          != 0)
+        {
+          putreg32(g_psram_timing, RP23XX_QMI_M0_TIMING);
+          (void)getreg32(RP23XX_QMI_M0_TIMING);
+        }
     }
 
   up_irq_restore(flags);

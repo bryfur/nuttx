@@ -279,6 +279,19 @@ void rp23xx_dmastart(DMA_HANDLE handle, dma_callback_t callback, void *arg);
 void rp23xx_dmastop(DMA_HANDLE handle);
 
 /****************************************************************************
+ * Name: rp23xx_dmahighpri
+ *
+ * Description:
+ *   Give a set-up channel preference in the DMA's issue scheduling
+ *   (HIGH_PRIORITY): for a peripheral whose FIFO must not overrun while
+ *   other channels wait on slow memory (the PSRAM).  Call it after
+ *   rp23xx_rxdmasetup() or rp23xx_txdmasetup(), before rp23xx_dmastart().
+ *
+ ****************************************************************************/
+
+void rp23xx_dmahighpri(DMA_HANDLE handle);
+
+/****************************************************************************
  * Name: rp23xx_dma_register
  *
  * Description:

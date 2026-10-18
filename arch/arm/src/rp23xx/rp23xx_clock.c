@@ -60,6 +60,7 @@
 #include "hardware/rp23xx_pads_qspi.h"
 #include "hardware/rp23xx_powman.h"
 #include "hardware/rp23xx_qmi.h"
+#include "hardware/rp23xx_xip.h"
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -229,6 +230,18 @@ static void locate_code(".time_critical.rp23xx_clock") noinline_function
 flash_timing(void)
 {
   uint32_t timing;
+
+  /* No flash at all (a board that boots into PSRAM: docs/psram-boot.md in
+   * the fpc tree): CS0 is a PSRAM, the image runs from it, and the loader
+   * made it writable (which a flash boot never does) and gave it a timing
+   * that is safe at any clk_sys.  Nothing here applies to it;
+   * rp23xx_psramconfig() sets its timing once the clock is up.
+   */
+
+  if ((getreg32(RP23XX_XIP_CTRL_BASE) & RP23XX_XIP_CTRL_WRITABLE_M0) != 0)
+    {
+      return;
+    }
 
   if ((getreg32(RP23XX_QMI_M0_RCMD) & RP23XX_QMI_CMD_PREFIX_MASK) ==
       QMI_RCMD_PREFIX_03H)
