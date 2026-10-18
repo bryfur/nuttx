@@ -108,6 +108,15 @@
 #define NX_GPUOP_FILL          1       /* Fill with colour */
 #define NX_GPUOP_BLEND         2       /* Blend (mode: NX_BLEND_*, nxaccel.h) */
 #define NX_GPUOP_COPY          3       /* Copy from src (opaque) */
+#define NX_GPUOP_SCALE         4       /* From the display hardware's
+                                        * memory itself, scaled: the
+                                        * p[0] x p[1] rectangle at (sx,
+                                        * sy) of its space (src NULL: not
+                                        * a window), to the operation's
+                                        * rectangle (opaque, the nearest
+                                        * pixel; nx_accel_s scale).  A
+                                        * game's canvas in its window
+                                        * (fpc/game.h) */
 
 /* The most operations one nx_gpuops() takes, and a layer window's display
  * list (nx_setdisplaylist(): the server keeps a copy)

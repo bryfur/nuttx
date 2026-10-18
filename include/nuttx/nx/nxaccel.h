@@ -300,6 +300,15 @@ struct nx_accel_s
 
   CODE bool (*lost)(void);
 
+  /* A scaled copy, optional (NULL): the rectangle src of the hardware's
+   * memory scaled to whole, of which only dest (inside whole) is drawn;
+   * opaque, the nearest pixel.  NX_GPUOP_SCALE (nxcompose.h)
+   */
+
+  CODE void (*scale)(FAR const struct nxgl_rect_s *dest,
+                     FAR const struct nxgl_rect_s *whole,
+                     FAR const struct nxgl_rect_s *src);
+
   uint32_t flags;                      /* NX_ACCEL_* */
 };
 

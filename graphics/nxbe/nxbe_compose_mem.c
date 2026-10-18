@@ -429,8 +429,10 @@ static void mem_gpuop(FAR struct nxbe_window_s *wnd,
   int x;
   int y;
 
-  if (op->w <= 0 || op->h <= 0)
+  if (op->w <= 0 || op->h <= 0 || op->op == NX_GPUOP_SCALE)
     {
+      /* (A scaled copy from the hardware's memory: not into memory) */
+
       return;
     }
 

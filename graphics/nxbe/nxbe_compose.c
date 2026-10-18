@@ -1227,6 +1227,23 @@ static void comp_gpuop(FAR struct nxbe_window_s *wnd,
       return;
     }
 
+  if (op->op == NX_GPUOP_SCALE)
+    {
+      /* From the hardware's memory, not a window's */
+
+      if (g_nxaccel->scale != NULL && op->src == NULL &&
+          op->p[0] > 0 && op->p[1] > 0)
+        {
+          struct nxgl_rect_s srect;
+
+          rect_set(&srect, op->sx, op->sy, op->sx + op->p[0] - 1,
+                   op->sy + op->p[1] - 1);
+          g_nxaccel->scale(&dest, &whole, &srect);
+        }
+
+      return;
+    }
+
   if (image)
     {
       src = op->src != NULL ? (FAR struct nxbe_window_s *)op->src : wnd;
