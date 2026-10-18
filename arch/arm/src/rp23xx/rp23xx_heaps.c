@@ -30,7 +30,11 @@
 #include <nuttx/mm/mm.h>
 
 #include "arm_internal.h"
+#include <arch/chip/psram.h>
+
 #include "rp23xx_psram.h"
+#include "hardware/rp23xx_xip.h"
+#include "hardware/rp23xx_memorymap.h"
 
 #if defined(CONFIG_RP23XX_PSRAM)
 
@@ -127,6 +131,48 @@ void up_allocate_heap(void **heap_start, size_t *heap_size)
 {
   *heap_start = psram_heap(heap_size);
 }
+
+#if CONFIG_MM_REGIONS > 1
+/* A board without flash runs from a second PSRAM on CS0, which its loader
+ * made writable (docs/psram-boot.md in the fpc tree): what the image leaves
+ * of it is a second region of the user heap, up to 4 KB short of its end
+ * (the loader's record of the image is in its last 16 bytes: a warm boot
+ * uses the image again).  Its size: the loader's mailbox says (psramboot.h:
+ * "PBOT", CS0's KB at +32), else that of the same part on CS1.
+ */
+
+extern uint8_t __flash_binary_end[];
+
+#define PSRAMBOOT_MBOX     0x20080000
+#define PSRAMBOOT_MAGIC    0x544f4250
+#define CS0_KEEP           4096
+
+void arm_addregion(void)
+{
+  uintptr_t start;
+  uintptr_t end;
+  size_t size = rp23xx_psram_size();
+
+  if ((getreg32(RP23XX_XIP_CTRL_BASE) & RP23XX_XIP_CTRL_WRITABLE_M0) == 0)
+    {
+      return;
+    }
+
+  if (getreg32(PSRAMBOOT_MBOX) == PSRAMBOOT_MAGIC &&
+      getreg32(PSRAMBOOT_MBOX + 32) != 0 &&
+      getreg32(PSRAMBOOT_MBOX + 32) <= RP23XX_PSRAM_WINDOW / 1024)
+    {
+      size = getreg32(PSRAMBOOT_MBOX + 32) * 1024;
+    }
+
+  start = ((uintptr_t)__flash_binary_end + 4095) & ~(uintptr_t)4095;
+  end   = RP23XX_FLASH_BASE + size - CS0_KEEP;
+  if (size > CS0_KEEP && start < end)
+    {
+      umm_addregion((void *)start, end - start);
+    }
+}
+#endif
 
 #elif defined (CONFIG_RP23XX_PSRAM_HEAP_SEPARATE)
 
