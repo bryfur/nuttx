@@ -1162,10 +1162,23 @@ static int fat_path2dirname(FAR const char **path,
         {
           /* Get short file name for given path */
 
-          char name[DIR_MAXFNAME];
+          char name[DIR_MAXFNAME + 1];
           FAR const char *tmp;
+          int i;
 
-          memcpy(name, dirinfo->fd_lfname, DIR_MAXFNAME);
+          /* A copy that ends with a NUL: a name of eleven characters
+           * ("__init__.py") fills the short form's length, and its parse
+           * must stop at its end, not run on into what follows the copy
+           * (which made such names unfindable once created).
+           */
+
+          for (i = 0; i < DIR_MAXFNAME && dirinfo->fd_lfname[i] != '\0';
+               i++)
+            {
+              name[i] = (char)dirinfo->fd_lfname[i];
+            }
+
+          name[i] = '\0';
           tmp = (FAR const char *)name;
           if (fat_parsesfname(&tmp, dirinfo, NULL) != OK)
             {
