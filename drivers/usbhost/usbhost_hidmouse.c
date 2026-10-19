@@ -725,7 +725,7 @@ static void usbhost_position(FAR struct usbhost_state_s *priv,
       disp |= 0xffffff00;
     }
 
-  pos = priv->waccum + CONFIG_HIDMOUSE_WSCALE * disp;
+  pos = priv->waccum + CONFIG_HIDMOUSE_WSCALE * disp * MOUSE_WHEEL_STEP;
   priv->waccum = itob16((int16_t)b16toi(pos));
 #endif
 }

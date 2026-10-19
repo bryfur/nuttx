@@ -99,6 +99,13 @@ struct mouse_vendor_cmd_s
   char data[1];
 };
 
+/* The wheels' unit in struct mouse_report_s: one notch of a mouse's wheel
+ * is MOUSE_WHEEL_STEP; a high-resolution wheel or a touchpad's scrolling
+ * reports parts of it (as NX_WHEEL_STEP, nuttx/nx/nx.h)
+ */
+
+#define MOUSE_WHEEL_STEP 120
+
 /****************************************************************************
  * Public Types
  ****************************************************************************/
@@ -114,8 +121,9 @@ struct mouse_report_s
                     /* Possibly padded with 1 byte here */
   int16_t x;        /* X coordinate of the mouse position */
   int16_t y;        /* Y coordinate of the mouse position */
-  int16_t wheel;    /* Mouse wheel position (turned away: more; it
-                     * wraps round: take the difference, int16_t) */
+  int16_t wheel;    /* Mouse wheel position, in 1/MOUSE_WHEEL_STEP of a
+                     * step (turned away: more; it wraps round: take the
+                     * difference, int16_t) */
   int16_t hwheel;   /* ... the horizontal one (to the right: more) */
 };
 

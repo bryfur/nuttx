@@ -202,8 +202,8 @@ void sim_mouseevent(int x, int y, int buttons, int wheel, int hwheel)
   sample.buttons  = (uint8_t)buttons;
   sample.x        = (int16_t)x;
   sample.y        = (int16_t)y;
-  priv->wheel     = (int16_t)(priv->wheel + wheel);
-  priv->hwheel    = (int16_t)(priv->hwheel + hwheel);
+  priv->wheel     = (int16_t)(priv->wheel + wheel * MOUSE_WHEEL_STEP);
+  priv->hwheel    = (int16_t)(priv->hwheel + hwheel * MOUSE_WHEEL_STEP);
   sample.wheel    = priv->wheel;
   sample.hwheel   = priv->hwheel;
 
