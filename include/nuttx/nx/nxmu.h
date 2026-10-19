@@ -145,6 +145,7 @@ enum nxmsg_e
   NX_CLIMSG_MOUSEIN,          /* New mouse positional data available for window */
   NX_CLIMSG_KBDIN,            /* New keypad input available for window */
   NX_CLIMSG_EVENT,            /* Server->client event */
+  NX_CLIMSG_WHEELIN,          /* The wheel turned over the window */
 
   /* Client-to-Server Messages **********************************************/
 
@@ -184,8 +185,9 @@ enum nxmsg_e
   NX_SVRMSG_DISPLAYMODE,      /* Get or set the display mode */
   NX_SVRMSG_KBDMODE,          /* Bytes or key events from the keyboard */
   NX_SVRMSG_SURFACE,          /* Where a window's pixels are */
-  NX_SVRMSG_WAKE              /* Nothing: the server looks again at what
+  NX_SVRMSG_WAKE,             /* Nothing: the server looks again at what
                                * the display hardware wants (nxmu_wake()) */
+  NX_SVRMSG_WHEELIN           /* The wheel turned (nx_wheelin()) */
 };
 
 /* Server-to-Client Message Structures **************************************/
@@ -246,6 +248,17 @@ struct nxclimsg_mousein_s
   FAR struct nxbe_window_s *wnd; /* The handle of window receiving mouse input */
   struct nxgl_point_s pos;       /* Mouse X/Y position */
   uint8_t buttons;               /* Mouse button set */
+};
+
+/* The wheel turned over a window */
+
+struct nxclimsg_wheelin_s
+{
+  uint32_t msgid;                /* NX_CLIMSG_WHEELIN */
+  FAR struct nxbe_window_s *wnd; /* The window under the pointer */
+  struct nxgl_point_s pos;       /* Mouse X/Y position */
+  int16_t dx;                    /* 1/NX_WHEEL_STEP of a step */
+  int16_t dy;
 };
 #endif
 
@@ -544,6 +557,15 @@ struct nxsvrmsg_mousein_s
   uint32_t msgid;                  /* NX_SVRMSG_MOUSEIN */
   struct nxgl_point_s pt;          /* Mouse X/Y position */
   uint8_t buttons;                 /* Mouse button set */
+};
+
+/* The wheel turned (nx_wheelin()) */
+
+struct nxsvrmsg_wheelin_s
+{
+  uint32_t msgid;                  /* NX_SVRMSG_WHEELIN */
+  int16_t dx;                      /* 1/NX_WHEEL_STEP of a step */
+  int16_t dy;
 };
 #endif
 

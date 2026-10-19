@@ -714,7 +714,10 @@ static void usbhost_position(FAR struct usbhost_state_s *priv,
   priv->yaccum = pos;
 
 #ifdef CONFIG_INPUT_MOUSE_WHEEL
-  /* Do the same for the wheel position */
+  /* The wheel's position adds up its steps and wraps round (a reader
+   * takes the difference from the last report, mouse.h): no end to
+   * turning it either way
+   */
 
   disp = rpt->wdisp;
   if ((rpt->wdisp & 0x80) != 0)
@@ -723,17 +726,7 @@ static void usbhost_position(FAR struct usbhost_state_s *priv,
     }
 
   pos = priv->waccum + CONFIG_HIDMOUSE_WSCALE * disp;
-
-  if (pos > HIDMOUSE_WMAX_B16)
-    {
-      pos = HIDMOUSE_WMAX_B16;
-    }
-  else if (pos < 0)
-    {
-      pos = 0;
-    }
-
-  priv->waccum = pos;
+  priv->waccum = itob16((int16_t)b16toi(pos));
 #endif
 }
 

@@ -210,7 +210,8 @@ void sim_x11events(void)
           case MotionNotify : /* Enabled by PointerMotionMask */
             {
               sim_mouseevent(event.xmotion.x, event.xmotion.y,
-                             sim_mousebuttonmap(event.xmotion.state, 0), 0);
+                             sim_mousebuttonmap(event.xmotion.state, 0), 0,
+                             0);
             }
             break;
 
@@ -227,6 +228,7 @@ void sim_x11events(void)
                */
 
               int wheel = 0;
+              int hwheel = 0;
 
               if (event.type == ButtonPress && event.xbutton.button == 4)
                 {
@@ -237,11 +239,21 @@ void sim_x11events(void)
                 {
                   wheel = -1;
                 }
+              else if (event.type == ButtonPress &&
+                       event.xbutton.button == 6)
+                {
+                  hwheel = -1;                    /* Across: 6 left, 7 right */
+                }
+              else if (event.type == ButtonPress &&
+                       event.xbutton.button == 7)
+                {
+                  hwheel = 1;
+                }
 
               sim_mouseevent(event.xbutton.x, event.xbutton.y,
                              sim_mousebuttonmap(event.xbutton.state,
                                                 event.xbutton.button),
-                             wheel);
+                             wheel, hwheel);
             }
             break;
 #endif

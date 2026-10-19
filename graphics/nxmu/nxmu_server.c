@@ -848,6 +848,14 @@ int nx_runinstance(FAR const char *mqname, FAR NX_DRIVERTYPE *dev)
               nxmu_mousein(&nxmu, &mousemsg->pt, mousemsg->buttons);
             }
             break;
+
+          case NX_SVRMSG_WHEELIN: /* The wheel turned (nx_wheelin()) */
+            {
+              FAR struct nxsvrmsg_wheelin_s *wheelmsg =
+                (FAR struct nxsvrmsg_wheelin_s *)buffer;
+              nxmu_wheelin(&nxmu, wheelmsg->dx, wheelmsg->dy);
+            }
+            break;
 #endif
 #ifdef CONFIG_NX_KBD
           case NX_SVRMSG_KBDIN: /* New keyboard report from keyboard client */

@@ -70,6 +70,9 @@ struct sim_dev_s
 {
   int eventloop;
   uint8_t minor;                     /* Minor device number */
+  int16_t wheel;                     /* The wheels' positions (the steps
+                                      * added up; they wrap round) */
+  int16_t hwheel;
   struct mouse_lowerhalf_s lower;    /* Mouse lowerhalf */
 };
 
@@ -182,7 +185,7 @@ int sim_mouse_uninitialize(void)
  * Name: sim_mouseevent
  ****************************************************************************/
 
-void sim_mouseevent(int x, int y, int buttons, int wheel)
+void sim_mouseevent(int x, int y, int buttons, int wheel, int hwheel)
 {
   struct sim_dev_s *priv = (struct sim_dev_s *)&g_simmouse;
   struct mouse_report_s sample;
@@ -192,13 +195,17 @@ void sim_mouseevent(int x, int y, int buttons, int wheel)
       return;
     }
 
-  iinfo("x=%d y=%d buttons=%02x wheel=%d\n", x, y, buttons, wheel);
+  iinfo("x=%d y=%d buttons=%02x wheel=%d hwheel=%d\n", x, y, buttons,
+        wheel, hwheel);
 
   memset(&sample, 0, sizeof(sample));
   sample.buttons  = (uint8_t)buttons;
   sample.x        = (int16_t)x;
   sample.y        = (int16_t)y;
-  sample.wheel    = (int16_t)wheel;
+  priv->wheel     = (int16_t)(priv->wheel + wheel);
+  priv->hwheel    = (int16_t)(priv->hwheel + hwheel);
+  sample.wheel    = priv->wheel;
+  sample.hwheel   = priv->hwheel;
 
   /* Report data changes */
 

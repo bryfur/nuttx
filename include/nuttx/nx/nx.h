@@ -70,6 +70,13 @@
 #define NX_LINECAP_PT2        0x02  /* Line cap on pt2 of the vector only */
 #define NX_LINECAP_BOTH       0x03  /* Line cap on both ends of the vector only */
 
+/* The wheel's unit (nx_wheelin(), the wheelin callback): one notch of a
+ * mouse's wheel is NX_WHEEL_STEP; a high-resolution wheel or a touchpad
+ * reports parts of it
+ */
+
+#define NX_WHEEL_STEP 120
+
 /****************************************************************************
  * Public Types
  ****************************************************************************/
@@ -244,6 +251,33 @@ struct nx_callback_s
 
   void (*event)(NXWINDOW hwnd, enum nx_event_e event, FAR void *arg1,
                 FAR void *arg2);
+
+  /**************************************************************************
+   * Name: wheelin
+   *
+   * Description:
+   *   A mouse's wheel turned, or a touchpad scrolled (two fingers), over
+   *   the window: the window under the pointer gets it, the window a drag
+   *   started in while a button is held.  A window without this callback
+   *   lets it go (the windows below do not get it).
+   *
+   * Input Parameters:
+   *   hwnd - Window handle
+   *   pos  - The (x,y) position of the mouse
+   *   dx   - Across, in 1/NX_WHEEL_STEP of a step (> 0: to the right)
+   *   dy   - Up and down, in 1/NX_WHEEL_STEP of a step (> 0: the wheel
+   *          turned away from the user, what shows the content above)
+   *   arg  - User provided argument (see nx_openwindow, nx_requestbkgd)
+   *
+   * Returned Value:
+   *   None
+   *
+   **************************************************************************/
+
+#ifdef CONFIG_NX_XYINPUT
+  void (*wheelin)(NXWINDOW hwnd, FAR const struct nxgl_point_s *pos,
+                  int dx, int dy, FAR void *arg);
+#endif
 };
 
 /****************************************************************************
@@ -1005,6 +1039,22 @@ int nx_kbdin(NXHANDLE handle, uint8_t nch, FAR const uint8_t *ch);
 #ifdef CONFIG_NX_XYINPUT
 int nx_mousein(NXHANDLE handle, nxgl_coord_t x,
                nxgl_coord_t y, uint8_t buttons);
+#endif
+
+/****************************************************************************
+ * Name: nx_wheelin
+ *
+ * Description:
+ *   Used by the thread that manages a pointing device to report that its
+ *   wheel turned (or a touchpad scrolled): dx across, dy up and down, in
+ *   1/NX_WHEEL_STEP of a wheel's step (one notch of a wheel: NX_WHEEL_STEP;
+ *   a high-resolution wheel or a touchpad reports less at a time).  The NX
+ *   server hands it to the window under the pointer (the wheelin callback).
+ *
+ ****************************************************************************/
+
+#ifdef CONFIG_NX_XYINPUT
+int nx_wheelin(NXHANDLE handle, int dx, int dy);
 #endif
 
 /****************************************************************************

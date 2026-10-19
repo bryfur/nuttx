@@ -56,6 +56,10 @@ static void nxtk_kbdin(NXWINDOW hwnd, uint8_t nch, const uint8_t *ch,
 #endif
 static void nxtk_event(NXWINDOW hwnd, enum nx_event_e event,
                        FAR void *arg1, FAR void *arg2);
+#ifdef CONFIG_NX_XYINPUT
+static void nxtk_wheelin(NXWINDOW hwnd, FAR const struct nxgl_point_s *pos,
+                         int dx, int dy, FAR void *arg);
+#endif
 
 /****************************************************************************
  * Public Data
@@ -72,6 +76,9 @@ const struct nx_callback_s g_nxtkcb =
   , nxtk_kbdin    /* kbdin */
 #endif
   , nxtk_event    /* event */
+#ifdef CONFIG_NX_XYINPUT
+  , nxtk_wheelin  /* wheelin */
+#endif
 };
 
 /****************************************************************************
@@ -301,6 +308,43 @@ static void nxtk_mousein(NXWINDOW hwnd, FAR const struct nxgl_point_s *pos,
     {
       nxgl_vectsubtract(&relpos, pos, &tbrect.pt1);
       fwnd->tbcb->mousein((NXTKWINDOW)fwnd, &relpos, buttons, fwnd->tbarg);
+    }
+}
+
+/****************************************************************************
+ * Name: nxtk_wheelin
+ *
+ * Description:
+ *   The wheel: to the client window or the toolbar, whichever the pointer
+ *   is in (while a button is held, where it went down), as the mouse goes.
+ *
+ ****************************************************************************/
+
+static void nxtk_wheelin(NXWINDOW hwnd, FAR const struct nxgl_point_s *pos,
+                         int dx, int dy, FAR void *arg)
+{
+  FAR struct nxtk_framedwindow_s *fwnd =
+                               (FAR struct nxtk_framedwindow_s *)hwnd;
+  struct nxgl_point_s at = fwnd->mbutton != 0 ? fwnd->mpos : *pos;
+  struct nxgl_point_s relpos;
+  struct nxgl_rect_s fwrect;
+  struct nxgl_rect_s tbrect;
+
+  nxgl_rectoffset(&fwrect, &fwnd->fwrect,
+                  -fwnd->fwbase.x, -fwnd->fwbase.y);
+  nxgl_rectoffset(&tbrect, &fwnd->tbrect,
+                  -fwnd->fwbase.x, -fwnd->fwbase.y);
+
+  if (fwnd->fwcb->wheelin != NULL && nxgl_rectinside(&fwrect, &at))
+    {
+      nxgl_vectsubtract(&relpos, pos, &fwrect.pt1);
+      fwnd->fwcb->wheelin((NXTKWINDOW)fwnd, &relpos, dx, dy, fwnd->fwarg);
+    }
+  else if (fwnd->tbcb != NULL && fwnd->tbcb->wheelin != NULL &&
+           nxgl_rectinside(&tbrect, &at))
+    {
+      nxgl_vectsubtract(&relpos, pos, &tbrect.pt1);
+      fwnd->tbcb->wheelin((NXTKWINDOW)fwnd, &relpos, dx, dy, fwnd->tbarg);
     }
 }
 #endif

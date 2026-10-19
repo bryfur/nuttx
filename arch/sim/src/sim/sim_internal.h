@@ -349,7 +349,7 @@ int sim_tsc_uninitialize(void);
 #ifdef CONFIG_SIM_MOUSE
 int sim_mouse_initialize(int minor);
 int sim_mouse_uninitialize(void);
-void sim_mouseevent(int x, int y, int buttons, int wheel);
+void sim_mouseevent(int x, int y, int buttons, int wheel, int hwheel);
 #endif
 
 /* sim_keyboard.c ***********************************************************/

@@ -293,4 +293,51 @@ int nxmu_mousein(FAR struct nxmu_state_s *nxmu,
   return OK;
 }
 
+/****************************************************************************
+ * Name: nxmu_wheelin
+ *
+ * Description:
+ *   The wheel turned: to the window under the pointer (the first one from
+ *   the top with callbacks that shows the pointer's position, as the mouse
+ *   reports go), or the drag's window while a button is held.  A window
+ *   without a wheelin callback lets it go.
+ *
+ ****************************************************************************/
+
+int nxmu_wheelin(FAR struct nxmu_state_s *nxmu, int dx, int dy)
+{
+  FAR struct nxbe_window_s *wnd = NULL;
+  struct nxclimsg_wheelin_s outmsg;
+
+  if (g_mbutton != 0)
+    {
+      wnd = nxmu_revalidate_g_mwnd(nxmu->be.topwnd);
+    }
+  else
+    {
+      for (wnd = nxmu->be.topwnd; wnd != NULL; wnd = wnd->below)
+        {
+          if (wnd->cb != NULL && wnd->cb->mousein != NULL &&
+              nxbe_isvisible(wnd, &g_mpos))
+            {
+              break;
+            }
+        }
+    }
+
+  if (wnd == NULL || wnd->cb == NULL || wnd->cb->wheelin == NULL)
+    {
+      return OK;
+    }
+
+  outmsg.msgid = NX_CLIMSG_WHEELIN;
+  outmsg.wnd   = wnd;
+  outmsg.dx    = (int16_t)dx;
+  outmsg.dy    = (int16_t)dy;
+  nxgl_vectsubtract(&outmsg.pos, &g_mpos,
+                    g_mbutton != 0 ? &g_morigin : &wnd->bounds.pt1);
+  return nxmu_sendclientwindow(wnd, &outmsg,
+                               sizeof(struct nxclimsg_wheelin_s));
+}
+
 #endif /* CONFIG_NX_XYINPUT */

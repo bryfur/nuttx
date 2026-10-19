@@ -280,6 +280,7 @@ int nxmu_mousereport(struct nxbe_window_s *wnd);
  ****************************************************************************/
 
 #ifdef CONFIG_NX_XYINPUT
+int nxmu_wheelin(FAR struct nxmu_state_s *nxmu, int dx, int dy);
 int nxmu_mousein(FAR struct nxmu_state_s *nxmu,
                  FAR const struct nxgl_point_s *pos, int button);
 #endif

@@ -114,7 +114,9 @@ struct mouse_report_s
                     /* Possibly padded with 1 byte here */
   int16_t x;        /* X coordinate of the mouse position */
   int16_t y;        /* Y coordinate of the mouse position */
-  int16_t wheel;    /* Mouse wheel position */
+  int16_t wheel;    /* Mouse wheel position (turned away: more; it
+                     * wraps round: take the difference, int16_t) */
+  int16_t hwheel;   /* ... the horizontal one (to the right: more) */
 };
 
 /* This structure is for mouse lower half driver */

@@ -37,6 +37,7 @@ if(CONFIG_NX)
       nx_kbdin.c
       nx_keys.c
       nx_mousein.c
+      nx_wheelin.c
       nx_releasebkgd.c
       nx_requestbkgd.c
       nx_setbgcolor.c

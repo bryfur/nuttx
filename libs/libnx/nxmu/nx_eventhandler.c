@@ -211,6 +211,20 @@ int nx_eventhandler(NXHANDLE handle)
           }
         }
       break;
+
+    case NX_CLIMSG_WHEELIN:
+      {
+        FAR struct nxclimsg_wheelin_s *wheel =
+            (FAR struct nxclimsg_wheelin_s *)buffer;
+        wnd = wheel->wnd;
+        DEBUGASSERT(wnd);
+        if (wnd->cb->wheelin)
+          {
+            wnd->cb->wheelin((NXWINDOW)wnd, &wheel->pos, wheel->dx,
+                             wheel->dy, wnd->arg);
+          }
+      }
+      break;
 #endif
 
 #ifdef CONFIG_NX_KBD
