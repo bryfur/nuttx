@@ -711,7 +711,14 @@ static int fat_open(FAR struct file *filep, FAR const char *relpath,
           goto errout_with_lock;
         }
 
-      /* Yes.. create the file */
+      /* Yes.. but not in a directory that is not there */
+
+      if (dirinfo.fd_noparent)
+        {
+          goto errout_with_lock;
+        }
+
+      /* Create the file */
 
       ret = fat_dircreate(fs, &dirinfo);
       if (ret < 0)
@@ -3741,10 +3748,10 @@ static int fat_mkdir(FAR struct inode *mountpt, FAR const char *relpath,
 
   /* Or if any error occurs other -ENOENT, then return the error.  For
    * example, if one of the earlier directory path segments was not found
-   * then ENOTDIR will be returned.
+   * (fd_noparent), -ENOENT.
    */
 
-  if (ret != -ENOENT)
+  if (ret != -ENOENT || dirinfo.fd_noparent)
     {
       /* If anything exists at this location, then we fail with EEXIST */
 
@@ -4053,10 +4060,11 @@ static int fat_rename(FAR struct inode *mountpt, FAR const char *oldrelpath,
   ret = fat_finddirentry(fs, &dirinfo, newrelpath);
 
   /* What we expect is -ENOENT mean that the full directory path was
-   * followed but that the object does not exists in the terminal directory.
+   * followed but that the object does not exists in the terminal directory
+   * (not fd_noparent: a directory on the way missing).
    */
 
-  if (ret != -ENOENT)
+  if (ret != -ENOENT || dirinfo.fd_noparent)
     {
       if (ret == OK)
         {
@@ -4095,10 +4103,17 @@ static int fat_rename(FAR struct inode *mountpt, FAR const char *oldrelpath,
       goto errout_with_lock;
     }
 
-  /* Copy the unchanged information into the new short file name entry. */
+  /* Copy the unchanged information into the new short file name entry:
+   * all but the new name's lower case flags (NTRes), which
+   * fat_dirnamewrite() has just written (else "master.lock" renamed to
+   * "master" reads back as "MASTER")
+   */
 
   direntry = &fs->fs_buffer[dirinfo.fd_seq.ds_offset];
   memcpy(&direntry[DIR_ATTRIBUTES], dirstate, DIR_SIZE - DIR_ATTRIBUTES);
+#ifdef CONFIG_FAT_LCNAMES
+  DIR_PUTNTRES(direntry, dirinfo.fd_ntflags);
+#endif
   fs->fs_dirty = true;
 
   /* The new short file name entry is still in the sector cache here.

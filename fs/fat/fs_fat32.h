@@ -1047,6 +1047,13 @@ struct fat_dirinfo_s
 
   bool     fd_root;
 
+  /* TRUE when fat_finddirentry() failed with -ENOENT because a directory
+   * on the way is missing, not only the last name: nothing can be created
+   * there
+   */
+
+  bool     fd_noparent;
+
   /* The following provides the sequence of directory entries used by the
    * file or directory.
    */

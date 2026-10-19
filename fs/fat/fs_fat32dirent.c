@@ -2606,6 +2606,8 @@ int fat_finddirentry(FAR struct fat_mountpt_s *fs,
   char terminator;
   int ret;
 
+  dirinfo->fd_noparent = false;
+
   /* Initialize to traverse the chain.  Set it to the cluster of the root
    * directory
    */
@@ -2705,15 +2707,18 @@ int fat_finddirentry(FAR struct fat_mountpt_s *fs,
 
       if (ret < 0)
         {
-          /* A return value of -ENOENT would mean that the path segment
-           * was not found.  Let's distinguish two cases:  (1) the final
-           * file was not found in the directory (-ENOENT), or (2) one
-           * of the directory path segments does not exist (-ENOTDIR)
+          /* A return value of -ENOENT means that the path segment was not
+           * found: (1) the final file was not found in the directory, or
+           * (2) one of the directory path segments does not exist
+           * (fd_noparent).  Both are -ENOENT, as POSIX has it (-ENOTDIR
+           * is for a segment that exists and is not a directory): stat()
+           * and the like tell a missing file so, as callers such as
+           * mkdir -p walking down a path expect.
            */
 
           if (ret == -ENOENT && terminator != '\0')
             {
-              ret = -ENOTDIR;
+              dirinfo->fd_noparent = true;
             }
 
           return ret;
