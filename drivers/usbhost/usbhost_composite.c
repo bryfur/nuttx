@@ -33,6 +33,7 @@
 
 #include <nuttx/kmalloc.h>
 #include <nuttx/usb/usbhost.h>
+#include <nuttx/usb/hid.h>
 
 #include "usbhost_composite.h"
 
@@ -339,9 +340,13 @@ static int usbhost_copyinterface(uint8_t ifno, FAR const uint8_t *configdesc,
                   desc = (FAR struct usb_desc_s *)&configdesc[offset];
                   len  = desc->len;
 
-                  /* Is this a class-specific interface descriptor?  */
+                  /* Is this a class-specific interface descriptor (a HID
+                   * interface's HID descriptor too: its report
+                   * descriptor's length)?
+                   */
 
-                  if (desc->type == USB_DESC_TYPE_CSINTERFACE)
+                  if (desc->type == USB_DESC_TYPE_CSINTERFACE ||
+                      desc->type == USBHID_DESCTYPE_HID)
                     {
                       /* Yes... return the descriptor */
 
