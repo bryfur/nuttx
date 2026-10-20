@@ -248,6 +248,14 @@
 #define DIV_DS           DIV_FOR(25000000)
 #define DIV_HS           DIV_FOR(50000000)
 #define DIV_SLOWEST      8                            /* lowest after errors */
+
+/* The smallest divider ever used (board.h; 1: as fast as the mode allows):
+ * a board whose card misbehaves at a clock that tunes well says so here
+ */
+
+#ifndef BOARD_SDIO_MIN_DIV
+#  define BOARD_SDIO_MIN_DIV 1
+#endif
 #define KHZ(div)         ((unsigned int)(BOARD_SYS_FREQ / 6000 / (div)))
 
 /* Command sampling points */
@@ -2625,7 +2633,7 @@ struct sdio_dev_s *rp23xx_sdio_initialize(int slotno)
 
   nxmutex_init(&priv->dev.mutex);
   spin_lock_init(&priv->lock);
-  priv->floor = 1;
+  priv->floor = BOARD_SDIO_MIN_DIV;
 
   /* DMA: the control channel's own interrupts are not wanted (it finishes
    * a control block every few words)
