@@ -114,13 +114,21 @@ static_assert(BOARD_VREG_MV >= 850 && BOARD_VREG_MV <= 1300 &&
 #  define FLASH_03H_CLKDIV \
      RP23XX_QMI_CLKDIV(BOARD_SYS_FREQ, BOARD_FLASH_03H_MAX_FREQ, \
                        BOARD_FLASH_TCO_PS)
+/* RXDELAY = CLKDIV (rp23xx_qmi_timing.h) up to its field's 7: the 03h
+ * read's divider passes 7 above 350 MHz (8 at 400 for its 50 MHz), and
+ * there the sample 8.75 ns after the rising edge rather than 10 is still
+ * well inside the 20 ns the data stays.
+ */
+
+#  define FLASH_RXDELAY(clkdiv) ((clkdiv) < 7 ? (clkdiv) : 7)
 #  define FLASH_TIMING(clkdiv) \
      RP23XX_QMI_TIMING(1, RP23XX_QMI_PAGEBREAK_NONE, 0, 0, 0, \
                        RP23XX_QMI_MIN_DESELECT(BOARD_SYS_FREQ, clkdiv, \
                                                BOARD_FLASH_TCSH_NS), \
-                       clkdiv, clkdiv)
-static_assert(FLASH_CLKDIV >= 1 && FLASH_03H_CLKDIV <= 7,
-              "flash: CLKDIV (and RXDELAY) out of range");
+                       FLASH_RXDELAY(clkdiv), clkdiv)
+static_assert(FLASH_CLKDIV >= 1 && FLASH_CLKDIV <= 7 &&
+              FLASH_03H_CLKDIV <= 255,
+              "flash: CLKDIV out of range");
 
 /* The QSPI pads as the Pico SDK's boot stage 2 sets them for a fast
  * flash: SCLK 8 mA with a fast slew, no Schmitt trigger on SD0-3 (less
