@@ -85,11 +85,19 @@ static_assert(BOARD_PLL_SYS_VCO_FREQ >= 750 * MHZ &&
 
 /* The core voltage (BOARD_VREG_MV, if the board gives one): 0.55 V + 50 mV
  * steps in POWMAN VREG.VSEL, up to 1.30 V without lifting the limit.
+ * 1.35 and 1.40 V (VSEL 16 and 17, the steps still 50 mV) only with
+ * VREG_CTRL.DISABLE_VOLTAGE_LIMIT set: outside the datasheet, an overclock's
+ * (the Pico SDK's vreg_set_voltage() does the same).
  */
 
 #ifdef BOARD_VREG_MV
-static_assert(BOARD_VREG_MV >= 850 && BOARD_VREG_MV <= 1300 &&
+static_assert(BOARD_VREG_MV >= 850 && BOARD_VREG_MV <= 1400 &&
               BOARD_VREG_MV % 50 == 0, "board.h: BOARD_VREG_MV");
+#  if BOARD_VREG_MV > 1300
+#    define VREG_CTRL_LIMIT     RP23XX_POWMAN_VREG_CTRL_DISABLE_VOLTAGE_LIMIT
+#  else
+#    define VREG_CTRL_LIMIT     0
+#  endif
 #  define VREG_VSEL             ((BOARD_VREG_MV - 550) / 50)
 #  define VREG_VSEL_SHIFT       4
 #  define POWMAN_PASSWORD       0x5afe0000
@@ -198,9 +206,12 @@ static void vreg_setup(void)
       return;
     }
 
-  /* VREG takes writes once unlocked (and cannot be locked again) */
+  /* VREG takes writes once unlocked (and cannot be locked again); above
+   * 1.30 V the limit is lifted with it
+   */
 
-  putreg32(POWMAN_PASSWORD | RP23XX_POWMAN_VREG_CTRL_UNLOCK,
+  putreg32(POWMAN_PASSWORD | RP23XX_POWMAN_VREG_CTRL_UNLOCK |
+           VREG_CTRL_LIMIT,
            RP23XX_POWMAN_VREG_CTRL + POWMAN_SET_ALIAS);
 
   while (getreg32(RP23XX_POWMAN_VREG) & RP23XX_POWMAN_VREG_UPDATE_IN_PROGRESS)
