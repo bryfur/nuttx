@@ -79,6 +79,9 @@
 static_assert(BOARD_PLL_SYS_VCO_FREQ / BOARD_PLL_SYS_POSTDIV1 /
               BOARD_PLL_SYS_POSTDIV2 == BOARD_PLL_SYS_FREQ,
               "board.h: the system PLL does not make BOARD_PLL_SYS_FREQ");
+static_assert(BOARD_PLL_SYS_VCO_FREQ % BOARD_XOSC_FREQ == 0,
+              "board.h: the system PLL's VCO is not a whole multiple of "
+              "the crystal (REFDIV 1): FBDIV would round it down");
 static_assert(BOARD_PLL_SYS_VCO_FREQ >= 750 * MHZ &&
               BOARD_PLL_SYS_VCO_FREQ <= 1600 * MHZ,
               "board.h: the system PLL's VCO is out of range");
