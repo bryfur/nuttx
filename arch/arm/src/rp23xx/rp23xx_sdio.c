@@ -25,7 +25,8 @@
  * drivers/mmcsd/mmcsd_sdio.c runs a microSD card in 4-bit mode.
  *
  * Three state machines, all clocked alike (the divider "div": one SD clock
- * is six of their ticks, so 300 MHz / 6 = 50 MHz at div 1):
+ * is SDIO_TICKS of their ticks, six or eight, whichever lets the clock come
+ * nearer 50 MHz: 300 MHz / 6 and 400 MHz / 8 are 50 MHz at div 1):
  *
  *   SM0  the clock and the command line.  It makes the clock all the time
  *        (side-set), idle or not; it sends a 48-bit command when the CPU
@@ -36,7 +37,7 @@
  *        input synchronizer bypassed or not: four sampling points.
  *   SM1  data in.  It finds each rising edge of the clock (wait gpio),
  *        waits rxk ticks and samples DAT0, until the start bit; then it
- *        samples DAT0-3 for the block and its CRCs every six ticks: being
+ *        samples DAT0-3 for the block and its CRCs every SDIO_TICKS: being
  *        clocked like SM0 it stays in step with the clock without looking
  *        at it again.
  *   SM2  data out.  Per block: the start bit, the block, the CRCs and the
@@ -242,7 +243,20 @@
 /* Clocks */
 
 #define SYS_MHZ          (BOARD_SYS_FREQ / 1000000)
-#define DIV_FOR(hz)      ((BOARD_SYS_FREQ + 6 * (hz) - 1) / (6 * (hz)))
+
+/* Ticks an SD clock: 6 or 8, the one whose high-speed clock (the fastest
+ * within 50 MHz, a whole divider) is the faster; 6 at 300 MHz and below
+ * (the programs as they were), 8 at 350 (43.75 MHz rather than 29) and
+ * 400 (50 MHz rather than 33).  Half a clock is SDIO_HALF.
+ */
+
+#define HS_AT(t)         (BOARD_SYS_FREQ / (t) / \
+                          ((BOARD_SYS_FREQ + (t) * 50000000 - 1) / \
+                           ((t) * 50000000)))
+#define SDIO_TICKS       (HS_AT(8) > HS_AT(6) ? 8 : 6)
+#define SDIO_HALF        (SDIO_TICKS / 2)
+#define DIV_FOR(hz)      ((BOARD_SYS_FREQ + SDIO_TICKS * (hz) - 1) / \
+                          (SDIO_TICKS * (hz)))
 #define DIV_ID           DIV_FOR(400000)
 #define DIV_NARROW       DIV_FOR(6250000)             /* the 1-bit SCR read */
 #define DIV_DS           DIV_FOR(25000000)
@@ -256,7 +270,8 @@
 #ifndef BOARD_SDIO_MIN_DIV
 #  define BOARD_SDIO_MIN_DIV 1
 #endif
-#define KHZ(div)         ((unsigned int)(BOARD_SYS_FREQ / 6000 / (div)))
+#define KHZ(div)         ((unsigned int)(BOARD_SYS_FREQ / 1000 / SDIO_TICKS / \
+                                         (div)))
 
 /* Command sampling points */
 
@@ -650,23 +665,26 @@ static void sdio_load_cmd(int var)
   uint16_t prog[CMD_LEN];
   int i;
 
-  /* Every instruction takes three ticks (one SD clock is two of them).
-   * c6-c10 sample on side s: the falling or the rising edge.
+  /* Every instruction takes half a clock, SDIO_HALF ticks (one SD clock
+   * is two of them).  c6-c10 sample on side s: the falling or the rising
+   * edge.
    */
 
-  prog[0]  = I_OUT(R_X, 8)              | SIDE(1) | DLY(2);  /* 47 */
-  prog[1]  = I_SET(R_PINDIRS, 1)        | SIDE(0) | DLY(2);
-  prog[2]  = I_OUT(R_Y, 8)              | SIDE(1) | DLY(2);  /* rx bits */
-  prog[3]  = I_OUT(R_PINS, 1)           | SIDE(0) | DLY(2);  /* tx: */
-  prog[4]  = I_JMP(C_XDEC, CMD_OFS + 3) | SIDE(1) | DLY(2);
-  prog[5]  = I_SET(R_PINDIRS, 0)        | SIDE(0) | DLY(2);
-  prog[6]  = I_JMP(C_PIN, CMD_OFS + 9)  | s       | DLY(2);  /* start? */
-  prog[7]  = I_JMP(C_ALWAYS, CMD_OFS + 6) | ns    | DLY(2);
-  prog[8]  = I_IN(R_PINS, 1)            | s       | DLY(2);
-  prog[9]  = I_JMP(C_YDEC, CMD_OFS + 8) | ns      | DLY(2);
-  prog[10] = I_PUSH                     | s       | DLY(2);
-  prog[11] = I_MOV(R_X, R_STATUS)       | ns      | DLY(2);  /* idle: */
-  prog[12] = I_JMP(C_NOTX, CMD_OFS)     | s       | DLY(2);
+  const uint16_t h = DLY(SDIO_HALF - 1);
+
+  prog[0]  = I_OUT(R_X, 8)              | SIDE(1) | h;  /* 47 */
+  prog[1]  = I_SET(R_PINDIRS, 1)        | SIDE(0) | h;
+  prog[2]  = I_OUT(R_Y, 8)              | SIDE(1) | h;  /* rx bits */
+  prog[3]  = I_OUT(R_PINS, 1)           | SIDE(0) | h;  /* tx: */
+  prog[4]  = I_JMP(C_XDEC, CMD_OFS + 3) | SIDE(1) | h;
+  prog[5]  = I_SET(R_PINDIRS, 0)        | SIDE(0) | h;
+  prog[6]  = I_JMP(C_PIN, CMD_OFS + 9)  | s       | h;  /* start? */
+  prog[7]  = I_JMP(C_ALWAYS, CMD_OFS + 6) | ns    | h;
+  prog[8]  = I_IN(R_PINS, 1)            | s       | h;
+  prog[9]  = I_JMP(C_YDEC, CMD_OFS + 8) | ns      | h;
+  prog[10] = I_PUSH                     | s       | h;
+  prog[11] = I_MOV(R_X, R_STATUS)       | ns      | h;  /* idle: */
+  prog[12] = I_JMP(C_NOTX, CMD_OFS)     | s       | h;
 
   for (i = 0; i < CMD_LEN; i++)
     {
@@ -690,15 +708,15 @@ static void sdio_load_rx(int k)
 
   /* Until the start bit, every clock is found again (wait gpio): a
    * command sent meanwhile shifts SM0's clock by half a period.  From the
-   * start bit on, the block is counted out in step, six ticks a nibble.
+   * start bit on, the block is counted out in step, SDIO_TICKS a nibble.
    */
 
   prog[0] = I_MOV(R_X, R_Y);
   prog[1] = I_WAIT(0, S_GPIO, VCLK);
   prog[2] = I_WAIT(1, S_GPIO, VCLK) | DLY(k);
   prog[3] = I_JMP(C_PIN, RX_OFS + 1);                      /* start bit? */
-  prog[4] = I_MOV(R_Y, R_Y) | DLY(4);                      /* (nop) */
-  prog[5] = I_IN(R_PINS, 4) | DLY(4);
+  prog[4] = I_MOV(R_Y, R_Y) | DLY(SDIO_TICKS - 2);         /* (nop) */
+  prog[5] = I_IN(R_PINS, 4) | DLY(SDIO_TICKS - 2);
   prog[6] = I_JMP(C_XDEC, RX_OFS + 5);
 
   for (i = 0; i < RX_LEN; i++)
@@ -717,11 +735,11 @@ static void sdio_load_tx(int fall, int k, int stk)
   prog[2]  = I_MOV(R_X, R_Y);
   prog[3]  = I_WAIT(fall ? 1 : 0, S_GPIO, VCLK);
   prog[4]  = I_WAIT(fall ? 0 : 1, S_GPIO, VCLK) | DLY(k);
-  prog[5]  = I_OUT(R_PINS, 4) | DLY(2);
-  prog[6]  = I_JMP(C_XDEC, TX_OFS + 5) | DLY(2);
+  prog[5]  = I_OUT(R_PINS, 4) | DLY(SDIO_HALF - 1);
+  prog[6]  = I_JMP(C_XDEC, TX_OFS + 5) | DLY(SDIO_HALF - 1);
   prog[7]  = I_SET(R_PINDIRS, 0);
   prog[8]  = I_SET(R_X, 15) | DLY(stk);
-  prog[9]  = I_IN(R_PINS, 1) | DLY(4);                     /* status */
+  prog[9]  = I_IN(R_PINS, 1) | DLY(SDIO_TICKS - 2);        /* status */
   prog[10] = I_JMP(C_XDEC, TX_OFS + 9);
   prog[11] = I_WAIT(1, S_PIN, 0);                          /* busy */
 
@@ -737,7 +755,8 @@ static void sdio_load_tx(int fall, int k, int stk)
 
 static int sdio_stk(int rxk, int fall, int txk)
 {
-  return ((rxk - 3 * fall - txk - 2) % 6 + 12) % 6;
+  return ((rxk - SDIO_HALF * fall - txk - 2) % SDIO_TICKS +
+          2 * SDIO_TICKS) % SDIO_TICKS;
 }
 
 /* SM0 to idle (the clock running), whatever it was doing */
@@ -782,7 +801,7 @@ static void sdio_defaults(struct rp23xx_sdio_s *priv)
   if (priv->div == 1)
     {
       priv->cmdvar = VAR_RISE | VAR_BYPASS;
-      priv->rxk    = 3;
+      priv->rxk    = SDIO_HALF;
       priv->txfall = 1;
       priv->txk    = 1;
     }
@@ -895,7 +914,7 @@ static int sdio_cmd_wait(struct rp23xx_sdio_s *priv)
 {
   int nwords = priv->rxbits == 0 ? 0 : priv->rxbits == 47 ? 2 : 5;
   uint32_t clocks = 48 + 80 + priv->rxbits + 16;
-  uint32_t limit = clocks * 6 * priv->div / SYS_MHZ + 500;
+  uint32_t limit = clocks * SDIO_TICKS * priv->div / SYS_MHZ + 500;
   uint32_t start = sdio_now();
   uint32_t pc;
   int i;
@@ -1712,9 +1731,9 @@ static int sdio_tune(struct rp23xx_sdio_s *priv)
   uint16_t saven = priv->nblocks;
   int phase[4];
   int order[4];
-  int pass[6];
+  int pass[SDIO_TICKS];
   char cl[5];
-  char rl[7];
+  char rl[SDIO_TICKS + 1];
   int i;
   int j;
   int m;
@@ -1728,10 +1747,10 @@ static int sdio_tune(struct rp23xx_sdio_s *priv)
 
   for (i = 0; i < 4; i++)
     {
-      int p = (vars[i] & VAR_RISE) ? 3 * priv->div : 6 * priv->div;
-
+      int p = (vars[i] & VAR_RISE) ? SDIO_HALF * priv->div :
+                                      SDIO_TICKS * priv->div;
       phase[i] = (p - ((vars[i] & VAR_BYPASS) ? 0 : 2) +
-                  6 * priv->div) % (6 * priv->div);
+                  SDIO_TICKS * priv->div) % (SDIO_TICKS * priv->div);
       order[i] = i;
     }
 
@@ -1777,19 +1796,19 @@ static int sdio_tune(struct rp23xx_sdio_s *priv)
   sdio_load_cmd(priv->cmdvar);
   sdio_cmd_restart(priv);
 
-  /* Data in: the six delays of a clock */
+  /* Data in: the SDIO_TICKS delays of a clock */
 
-  for (i = 0; i < 6; i++)
+  for (i = 0; i < SDIO_TICKS; i++)
     {
       sdio_load_rx(i);
       pass[i] = sdio_test_rx(priv, 4) == 4;
       rl[i] = pass[i] ? '+' : '.';
     }
 
-  rl[6] = '\0';
+  rl[SDIO_TICKS] = '\0';
   priv->blocklen = savebl;
   priv->nblocks  = saven;
-  m = sdio_middle(pass, 6, priv->rxk);
+  m = sdio_middle(pass, SDIO_TICKS, priv->rxk);
   if (m < 0)
     {
       syslog(LOG_WARNING, "sdio: %u kHz: no data sampling point works "
@@ -2765,7 +2784,7 @@ static void sdio_trace_cmd(struct rp23xx_sdio_s *priv, uint32_t cmd,
   memset(buf, 0, sizeof(buf));
   sm_disable(1 << 3);
   putreg32(I_IN(R_PINS, 2), PIO_INSTR_MEM(TX_OFS));
-  putreg32(((priv->div * 6 / 10) << RP23XX_PIO_SM_CLKDIV_INT_SHIFT),
+  putreg32(((priv->div * SDIO_TICKS / 10) << RP23XX_PIO_SM_CLKDIV_INT_SHIFT),
            PIO_CLKDIV(3));
   putreg32((TX_OFS << RP23XX_PIO_SM_EXECCTRL_WRAP_TOP_SHIFT) |
            (TX_OFS << RP23XX_PIO_SM_EXECCTRL_WRAP_BOTTOM_SHIFT),
