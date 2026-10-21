@@ -59,6 +59,14 @@
  */
 
 const char ELF_ABI_SYM = 0;
+
+/* ... and the SDK version it implements: programs built against the SDK
+ * import this one instead (crt0_sdk)
+ */
+
+#ifdef FPC_SDK_SYM
+const char FPC_SDK_SYM = 0;
+#endif
 #endif
 
 /****************************************************************************
@@ -476,6 +484,17 @@ int libelf_symvalue(FAR struct module_s *modp,
           if (symbol == NULL)
             {
 #ifdef CONFIG_LIBC_ELF_ABI_STAMP
+#  ifdef FPC_SDK_SYM
+              if (strncmp(exportinfo.name, "__fpc_sdk_v", 11) == 0)
+                {
+                  syslog(LOG_ERR, "elf: built against SDK version %s, "
+                         "which this firmware does not implement (it "
+                         "implements version %d): build it against this "
+                         "firmware's SDK\n", exportinfo.name + 11,
+                         FPC_SDK_VERSION);
+                }
+              else
+#  endif
               if (strncmp(exportinfo.name, "__elf_abi_", 10) == 0)
                 {
                   syslog(LOG_ERR, "elf: built by another firmware build "

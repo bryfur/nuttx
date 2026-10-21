@@ -182,9 +182,15 @@ $(STARTUP_OBJS): %$(OBJEXT): %.c
 	$(Q) $(CC) $(CELFFLAGS) -c common$(DELIM)crt0.c -o crt0$(OBJEXT)
 
 # A new module ABI id (the board's build rewrites the header when it
-# changes) is a new crt0
+# changes) is a new crt0; crt0_sdk is the one programs built against the SDK
+# link (the native kit's: tools/mkkit.py), stamped with its version
 ifeq ($(CONFIG_LIBC_ELF_ABI_STAMP),y)
 $(STARTUP_OBJS): $(TOPDIR)$(DELIM)include$(DELIM)nuttx$(DELIM)elf_abi.h
+
+crt0_sdk$(OBJEXT): common$(DELIM)crt0.c $(TOPDIR)$(DELIM)include$(DELIM)nuttx$(DELIM)elf_abi.h
+	$(Q) $(CC) $(CELFFLAGS) -DELF_STAMP_SDK -c common$(DELIM)crt0.c -o $@
+
+$(BIN): crt0_sdk$(OBJEXT)
 endif
 
 ifeq ($(CONFIG_BUILD_FLAT),y)

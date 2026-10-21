@@ -61,8 +61,18 @@ int main(int argc, char *argv[]);
 #  include <nuttx/compiler.h>
 #  include <nuttx/elf_abi.h>
 
+/* (ELF_STAMP_SDK, crt0_sdk.o: the native kit's start-up code, for programs
+ * built against the SDK: they import the SDK version's symbol instead, and
+ * run on any firmware that implements that version)
+ */
+
+#  if defined(ELF_STAMP_SDK) && defined(FPC_SDK_SYM)
+extern const char FPC_SDK_SYM;
+static const char *const g_elf_abi used_data = &FPC_SDK_SYM;
+#  else
 extern const char ELF_ABI_SYM;
 static const char *const g_elf_abi used_data = &ELF_ABI_SYM;
+#  endif
 #endif
 
 /****************************************************************************
