@@ -158,7 +158,10 @@ if(CONFIG_RP23XX_DCP)
       PRIVATE
         $<GENEX_EVAL:$<TARGET_PROPERTY:nuttx_global,NUTTX_ELF_APP_COMPILE_OPTIONS>>
     )
-    set_target_properties(modrt PROPERTIES OUTPUT_NAME modrt PREFIX "")
+    # (built for the kit, though nothing of the firmware links it: its
+    # directory is otherwise left out of the default build)
+    set_target_properties(modrt PROPERTIES OUTPUT_NAME modrt PREFIX ""
+                                           EXCLUDE_FROM_ALL FALSE)
   endif()
 endif()
 
