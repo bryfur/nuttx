@@ -72,6 +72,11 @@
 #define NX_BLEND_EXT          0x10     /* Bits 1:0 select an extended source: */
 #define NX_BLEND_SRC_BC1      0x10     /* BC1 blocks (below), f = 0 where
                                         * transparent */
+#define NX_BLEND_BG           0x20     /* D is the colour key (text over
+                                        * its own background): an
+                                        * accelerator need not read it; a
+                                        * promise, so reading it is the
+                                        * same */
 #define NX_BLEND_KEY          0x40     /* s == key: f = 0 */
 #define NX_BLEND_DITHER       0x80
 
