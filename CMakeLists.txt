@@ -444,6 +444,7 @@ include(nuttx_extensions)
 include(nuttx_add_application)
 include(nuttx_add_romfs)
 include(nuttx_add_symtab)
+include(nuttx_crt0_sdk)
 include(nuttx_add_module)
 include(nuttx_add_dependencies)
 include(nuttx_export_header)
@@ -837,15 +838,18 @@ else()
       DEPENDS ${nuttx_libs} sim_head
       COMMAND_EXPAND_LISTS)
   else()
+    # (FPC) and the files the board adds (NUTTX_REL_INPUTS: an EXTERN script,
+    # which takes what it names from the libraries)
+    set(rel_inputs "$<TARGET_PROPERTY:nuttx,NUTTX_REL_INPUTS>")
     add_custom_command(
       OUTPUT nuttx.rel
       COMMAND
         ${CMAKE_C_COMPILER} ARGS -r $<$<BOOL:${CONFIG_SIM_M32}>:-m32>
         $<$<BOOL:${LINUX}>:-Wl,-z,noexecstack> $<TARGET_OBJECTS:sim_head>
         $<$<NOT:$<BOOL:${APPLE}>>:-Wl,--start-group> ${nuttx_libs_paths}
-        $<$<NOT:$<BOOL:${APPLE}>>:-Wl,--end-group> -o nuttx.rel
+        ${rel_inputs} $<$<NOT:$<BOOL:${APPLE}>>:-Wl,--end-group> -o nuttx.rel
       COMMAND ${CMAKE_OBJCOPY} --redefine-syms=nuttx-names.dat nuttx.rel
-      DEPENDS ${nuttx_libs} sim_head sim_redefine_symbols
+      DEPENDS ${nuttx_libs} sim_head sim_redefine_symbols ${rel_inputs}
       COMMAND_EXPAND_LISTS)
   endif()
   add_custom_target(nuttx-rel DEPENDS nuttx.rel

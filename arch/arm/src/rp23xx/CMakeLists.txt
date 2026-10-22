@@ -113,6 +113,55 @@ if(CONFIG_CRYPTO_CRYPTODEV_HARDWARE)
   list(APPEND SRCS rp23xx_crypto.c)
 endif()
 
+if(CONFIG_RP23XX_SHA256 OR CONFIG_CRYPTO_CRYPTODEV_HARDWARE)
+  list(APPEND SRCS rp23xx_sha256.c)
+endif()
+
+# (FPC) The double-precision coprocessor (as Make.defs): rp23xx_dcp.S in the
+# firmware; librp23xx_dcpsoft.a, libgcc's double routines renamed for the
+# cases the coprocessor does not do as libgcc (the firmware's: modules reach
+# them through the symbol table); modrt.a, rp23xx_dcp.S for each loadable
+# module, linked before libgcc (Config.mk's MODULE_RTSRC: the native kit's
+# lib/modrt.a, tools/mkkit.py)
+
+if(CONFIG_RP23XX_DCP)
+  list(APPEND SRCS rp23xx_dcp.S)
+
+  get_directory_property(dir_opts COMPILE_OPTIONS)
+  set(cpu_flags)
+  foreach(opt ${dir_opts})
+    if(opt MATCHES "^-m")
+      list(APPEND cpu_flags ${opt})
+    endif()
+  endforeach()
+  string(JOIN " " cc_cpu ${CMAKE_C_COMPILER} ${cpu_flags})
+
+  set(dcpsoft ${CMAKE_BINARY_DIR}/librp23xx_dcpsoft.a)
+  add_custom_command(
+    OUTPUT ${dcpsoft}
+    COMMAND sh ${CMAKE_CURRENT_LIST_DIR}/rp23xx_dcpsoft.sh "${cc_cpu}"
+            ${TOOLCHAIN_PREFIX}- ${dcpsoft}
+    DEPENDS ${CMAKE_CURRENT_LIST_DIR}/rp23xx_dcpsoft.sh
+    COMMENT "Generating librp23xx_dcpsoft.a")
+  add_custom_target(rp23xx_dcpsoft DEPENDS ${dcpsoft})
+  add_library(rp23xx_dcpsoft_lib STATIC IMPORTED GLOBAL)
+  set_target_properties(rp23xx_dcpsoft_lib PROPERTIES IMPORTED_LOCATION
+                                                      ${dcpsoft})
+  set_property(GLOBAL APPEND PROPERTY NUTTX_EXTRA_LIBRARIES rp23xx_dcpsoft_lib)
+
+  if(CONFIG_MODULES)
+    add_library(modrt STATIC rp23xx_dcp.S)
+    nuttx_add_library_internal(modrt)
+    target_compile_definitions(modrt PRIVATE RP23XX_DCP_MODULE)
+    target_compile_options(
+      modrt
+      PRIVATE
+        $<GENEX_EVAL:$<TARGET_PROPERTY:nuttx_global,NUTTX_ELF_APP_COMPILE_OPTIONS>>
+    )
+    set_target_properties(modrt PROPERTIES OUTPUT_NAME modrt PREFIX "")
+  endif()
+endif()
+
 if(CONFIG_RP23XX_FLASH_MTD)
   list(APPEND SRCS rp23xx_flash_mtd.c)
 endif()

@@ -354,3 +354,18 @@ if(HOST_COMPILE_OPTIONS)
 endif()
 
 target_compile_definitions(nuttx PRIVATE ${HOST_DEFINITIONS})
+
+# (FPC) The modules' start-up code (sim_crt0.c), and crt0_sdk.o: the native
+# kit's (tools/mkkit.py), stamped with the SDK version rather than the build
+
+if(CONFIG_MODULES)
+  nuttx_add_aux_library(STARTUP_OBJS sim_crt0.c)
+  target_compile_options(
+    STARTUP_OBJS
+    PRIVATE
+      $<GENEX_EVAL:$<TARGET_PROPERTY:nuttx_global,NUTTX_ELF_APP_COMPILE_OPTIONS>>
+  )
+  if(CONFIG_LIBC_ELF_ABI_STAMP)
+    nuttx_crt0_sdk(sim_crt0.c)
+  endif()
+endif()

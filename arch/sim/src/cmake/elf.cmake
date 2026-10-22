@@ -22,8 +22,22 @@
 
 nuttx_elf_compile_options(-fvisibility=hidden -fno-pic)
 
-nuttx_elf_compile_options_ifdef(CONFIG_LIBC_ARCH_ELF_64BIT -mcmodel=large)
+# (FPC) the host compiler's defaults NuttX does not have (Make.defs'
+# CMODULEFLAGS: a module would call __stack_chk_fail)
+nuttx_elf_compile_options(-fno-stack-protector)
 
-nuttx_elf_link_options(-r -e main)
+# (FPC) amd64: modules load into NuttX's heap, out of a 32-bit relocation's
+# reach of the firmware (-mcmodel=small); as CELFFLAGS in the board's Make.defs
+# (there was CONFIG_LIBC_ARCH_ELF_64BIT here, which no Kconfig defines)
+nuttx_elf_compile_options_ifdef(CONFIG_ARCH_64BIT -mcmodel=large)
+
+# (FPC) With modules, a module starts at sim_crt0.c's _start (constructors,
+# the ABI stamp, main, exit), as the board's do
+
+if(CONFIG_MODULES)
+  nuttx_elf_link_options(-r -e _start)
+else()
+  nuttx_elf_link_options(-r -e main)
+endif()
 
 nuttx_elf_link_options_ifdef(CONFIG_SIM_M32 -melf_i386)

@@ -95,3 +95,10 @@ target_compile_options(
   STARTUP_OBJS
   PRIVATE
     $<GENEX_EVAL:$<TARGET_PROPERTY:nuttx_global,NUTTX_ELF_APP_COMPILE_OPTIONS>>)
+
+# (FPC) crt0_sdk.o: the native kit's start-up code (tools/mkkit.py), stamped
+# with the SDK version rather than the build
+
+if(CONFIG_LIBC_ELF_ABI_STAMP)
+  nuttx_crt0_sdk(crt0.c)
+endif()
