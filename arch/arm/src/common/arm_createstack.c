@@ -132,7 +132,14 @@ int up_create_stack(struct tcb_s *tcb, size_t stack_size, uint8_t ttype)
         {
           tcb->stack_alloc_ptr = kmm_memalign(TLS_STACK_ALIGN, stack_size);
         }
-      else
+
+      /* (FPC) A task's or pthread's stack the kernel heap has no room for
+       * (ARM_STACKS_KERNEL_HEAP: the internal SRAM, held by a module's
+       * code there too) comes from the user heap: slower, but the task
+       * starts
+       */
+
+      if (tcb->stack_alloc_ptr == NULL && ttype != TCB_FLAG_TTYPE_KERNEL)
 #endif
         {
           /* Use the user-space allocator if this is a task or pthread */
@@ -149,7 +156,10 @@ int up_create_stack(struct tcb_s *tcb, size_t stack_size, uint8_t ttype)
         {
           tcb->stack_alloc_ptr = kmm_malloc(stack_size);
         }
-      else
+
+      /* (FPC) As above: the user heap when the kernel heap has no room */
+
+      if (tcb->stack_alloc_ptr == NULL && ttype != TCB_FLAG_TTYPE_KERNEL)
 #endif
         {
           /* Use the user-space allocator if this is a task or pthread */

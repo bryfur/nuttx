@@ -1064,6 +1064,8 @@ config ARM_STACKS_KERNEL_HEAP
 		heap too, not the user heap.  For a flat build whose kernel heap
 		is in fast internal memory and whose user heap (malloc) is in
 		slower external memory: stacks are the busiest memory there is.
+		A task's or pthread's stack the kernel heap has no room for comes
+		from the user heap all the same.
 
 config ARCH_ARMV6M
 	bool
