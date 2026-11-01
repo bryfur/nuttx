@@ -211,11 +211,11 @@ struct nx_compose_stats_s
                                   * the swap, or lost) */
   uint32_t swapcells;            /* Cells in the swap */
   uint32_t swapbytes;            /* ... the memory it takes */
-  uint32_t swapouts;             /* Cells read back into it */
+  uint32_t swapouts;             /* Cells saved into backing */
   uint32_t swapins;              /* ... put back from it */
   uint32_t swaplost;             /* Cells lost (no room in the swap) */
   uint32_t redrawn;              /* ... drawn again by their clients */
-  uint64_t swapoutus;            /* Time reading back */
+  uint64_t swapoutus;            /* Time saving to backing */
   uint64_t swapinus;             /* ... putting back */
   uint32_t swapuniform;          /* Cells read back of one colour */
   uint32_t swapcleaned;          /* Copies made of cells kept */

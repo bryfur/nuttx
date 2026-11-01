@@ -558,8 +558,8 @@ void nxbe_surface_get(FAR struct nxbe_window_s *wnd,
               if ((c->flags[k] & NXBE_CELL_SWAP) != 0 && bpp == 16 &&
                   c->swap[k] >= 0)
                 {
-                  pix = (FAR const uint16_t *)(nxbe_swap_slot(c->swap[k]) +
-                                               1);
+                  FAR uint32_t *slot=nxbe_swap_slot(c->swap[k]);
+                  if(slot) pix=(FAR const uint16_t *)(slot+1);
                 }
 #endif
 
@@ -577,7 +577,7 @@ void nxbe_surface_get(FAR struct nxbe_window_s *wnd,
                     }
 #ifdef CONFIG_NX_COMPOSITOR
                   else if ((c->flags[k] & NXBE_CELL_SWAP) != 0 &&
-                           bpp == 16)
+                           bpp == 16 && NXBE_SWAP_ISCOLOUR(c->swap[k]))
                     {
                       FAR uint16_t *d16 = (FAR uint16_t *)d;
                       uint16_t col = NXBE_SWAP_THECOLOUR(c->swap[k]);
@@ -850,10 +850,10 @@ static inline bool pwfb_parked(FAR struct nxbe_window_s *wnd)
  * are out of date there
  */
 
-static inline void pwfb_drawn(FAR struct nxbe_window_s *wnd,
+static inline bool pwfb_drawn(FAR struct nxbe_window_s *wnd,
                               FAR const struct nxgl_rect_s *rel)
 {
-  nxbe_surface_drawing(wnd, rel);
+  if(!nxbe_surface_drawing(wnd,rel)) return false;
 #ifdef CONFIG_NX_COMPOSITOR
   if (wnd->srccache != NULL)
     {
@@ -862,6 +862,7 @@ static inline void pwfb_drawn(FAR struct nxbe_window_s *wnd,
 #endif
 
   nxbe_surface_drawn(wnd, rel);
+  return true;
 }
 
 static void pwfb_setpixel(FAR struct nxbe_window_s *wnd,
@@ -883,7 +884,7 @@ static void pwfb_setpixel(FAR struct nxbe_window_s *wnd,
 
   rect.pt1 = *pos;
   rect.pt2 = *pos;
-  pwfb_drawn(wnd, &rect);
+  if(!pwfb_drawn(wnd, &rect)) return;
   nxbe_surface_fill(wnd, &rect, color);
 }
 
@@ -902,7 +903,7 @@ static void pwfb_fillrectangle(FAR struct nxbe_window_s *wnd,
       return;
     }
 
-  pwfb_drawn(wnd, rect);
+  if(!pwfb_drawn(wnd, rect)) return;
   nxbe_surface_fill(wnd, rect, color);
 }
 
@@ -959,7 +960,7 @@ static void pwfb_filltrapezoid(FAR struct nxbe_window_s *wnd,
       return;
     }
 
-  pwfb_drawn(wnd, bounds);
+  if(!pwfb_drawn(wnd, bounds)) return;
   n = nxbe_surface_pieces(wnd, &p);
   for (i = 0; i < n; i++)
     {
@@ -1005,7 +1006,7 @@ static void pwfb_moverectangle(FAR struct nxbe_window_s *wnd,
   offset.x = destpos->x - rect->pt1.x;
   offset.y = destpos->y - rect->pt1.y;
   nxgl_rectoffset(&dst, rect, offset.x, offset.y);
-  pwfb_drawn(wnd, &dst);
+  if(!pwfb_drawn(wnd, &dst)) return;
   nxbe_surface_move(wnd, rect, &offset);
 }
 
@@ -1028,7 +1029,7 @@ static void pwfb_copyrectangle(FAR struct nxbe_window_s *wnd,
       return;
     }
 
-  pwfb_drawn(wnd, dest);
+  if(!pwfb_drawn(wnd, dest)) return;
   pix = (FAR const uint8_t *)src +
         (size_t)(dest->pt1.y - origin->y) * srcstride +
         (((dest->pt1.x - origin->x) * wnd->be->plane[0].pinfo.bpp) >> 3);
@@ -1419,7 +1420,7 @@ static void cell_abs(uint16_t cell, FAR struct nxgl_rect_s *r)
  * (rather than those cells lost, its picture black there)
  */
 
-void nxbe_surface_drawing(FAR struct nxbe_window_s *wnd,
+bool nxbe_surface_drawing(FAR struct nxbe_window_s *wnd,
                           FAR const struct nxgl_rect_s *rel)
 {
 #ifdef CONFIG_NX_COMPOSITOR
@@ -1433,10 +1434,23 @@ void nxbe_surface_drawing(FAR struct nxbe_window_s *wnd,
   int i;
   int j;
 
+  if(wnd->mip==NULL && c && c->cw>0 && c->nres<c->cw*c->ch &&
+     cells_range(c,rel,&i0,&j0,&i1,&j1))
+    {
+      bool ok;
+      for(j=j0;j<=j1;j++) for(i=i0;i<=i1;i++)
+        c->flags[j*c->cw+i]|=NXBE_CELL_DRAW|NXBE_CELL_NEED;
+      ok=nxbe_surface_ensure(wnd,NXBE_ENSURE_ROOM);
+      for(j=j0;j<=j1;j++) for(i=i0;i<=i1;i++)
+        c->flags[j*c->cw+i]&=~NXBE_CELL_DRAW;
+      nxbe_compose_needs(true);
+      return ok;
+    }
+
   if (wnd->mip == NULL || c == NULL || c->cw == 0 ||
       c->nres == c->cw * c->ch || !cells_range(c, rel, &i0, &j0, &i1, &j1))
     {
-      return;
+      return true;
     }
 
   spare = g_nxaccel->cells_free_count() - NXCOMP_CELLSPARE * 4;
@@ -1462,6 +1476,7 @@ void nxbe_surface_drawing(FAR struct nxbe_window_s *wnd,
       nxbe_compose_needs(true);
     }
 #endif
+  return true;
 }
 
 /* rel of the window drawn into: the copies of those cells in the swap
@@ -1600,20 +1615,6 @@ static void cell_read(uint16_t cell, FAR uint32_t *buf)
 
 static uint32_t g_cellbuf[32 * 32 / 2 + 2];
 
-static void cell_write(uint16_t cell, FAR const uint32_t *buf)
-{
-  struct nxgl_rect_s r;
-  int npx = 1 << (2 * g_nxaccel->cellshift);
-
-  /* (Through the server's buffer: the swap's memory read once, not as
-   * often as the hardware's put looks at the pixels)
-   */
-
-  memcpy(g_cellbuf + 1, buf + 1, npx * 2);
-  cell_abs(cell, &r);
-  g_nxaccel->copy(&r, g_cellbuf + 1, &r.pt1, (r.pt2.x - r.pt1.x + 1) * 2);
-}
-
 /* Cell k of the window gives up its cell: a copy kept in the swap (read
  * back, unless it has one), else lost if its client draws it again on
  * request.  False if it cannot go.
@@ -1644,6 +1645,16 @@ static bool cell_out(FAR struct nxbe_window_s *wnd,
     }
   else
     {
+      struct nxgl_rect_s source;
+      cell_abs(c->map[k],&source);
+      t0=perf_gettime();
+      slot=nxbe_swap_save(&source);
+      if(slot>=0)
+        {
+          c->swap[k]=slot; c->flags[k]|=NXBE_CELL_SWAP; c->nswap++;
+        }
+      else
+        {
       /* Read into the server's buffer: a cell of one colour is kept as
        * that colour, another in a slot of the swap; with no slot, lost if
        * its client draws it again on request
@@ -1671,6 +1682,7 @@ static bool cell_out(FAR struct nxbe_window_s *wnd,
           c->nswap++;
         }
 
+        }
       g_nxbe_swap.outus += swap_us(t0);
       g_nxbe_swap.outs++;
       if ((c->flags[k] & NXBE_CELL_SWAP) == 0)
@@ -1708,6 +1720,7 @@ int nxbe_surface_evict(int want, bool io)
 {
   FAR struct nxbe_window_s *wnd;
   int pass;
+  int hidden;
   int n = 0;
   int k;
 
@@ -1718,13 +1731,20 @@ int nxbe_surface_evict(int want, bool io)
 
   for (pass = 0; pass < (io ? 2 : 1) && n < want; pass++)
     {
-      for (wnd = g_ramwnds->be->bkgd.above; wnd != NULL && n < want;
-           wnd = wnd->above)
+      /* Hidden windows are absent from the visible z-order list. Visit
+       * them first through the surface list, then visible windows from
+       * bottom to top as before.
+       */
+      for(hidden=1;hidden>=0 && n<want;hidden--)
+      for (wnd = hidden ? g_ramwnds : g_ramwnds->be->bkgd.above;
+           wnd != NULL && n < want;
+           wnd = hidden ? wnd->surfnext : wnd->above)
         {
           FAR struct nxbe_cells_s *c = wnd->cells;
           bool any = false;
 
-          if (!wnd->surface || c == NULL || c->cw == 0 || c->nres == 0)
+          if ((hidden && !NXBE_ISHIDDEN(wnd)) ||
+              !wnd->surface || c == NULL || c->cw == 0 || c->nres == 0)
             {
               continue;
             }
@@ -1782,8 +1802,7 @@ int nxbe_surface_clean(int max)
       return 0;
     }
 
-  for (wnd = g_ramwnds->be->bkgd.above; wnd != NULL && n < max;
-       wnd = wnd->above)
+  for (wnd = g_ramwnds; wnd != NULL && n < max; wnd = wnd->surfnext)
     {
       FAR struct nxbe_cells_s *c = wnd->cells;
 
@@ -1802,6 +1821,14 @@ int nxbe_surface_clean(int max)
               continue;
             }
 
+          struct nxgl_rect_s source;
+          cell_abs(c->map[k],&source);
+          slot=nxbe_swap_save(&source);
+          if(slot>=0)
+            {
+              c->swap[k]=slot; c->flags[k]|=NXBE_CELL_SWAP; c->nswap++;
+              g_nxbe_swap.cleaned++; n++; continue;
+            }
           cell_read(c->map[k], g_cellbuf);
           n++;
           for (i = 1; i < npx && px[i] == px[0]; i++)
@@ -1952,7 +1979,22 @@ bool nxbe_surface_ensure(FAR struct nxbe_window_s *wnd, int how)
             }
           else
             {
-              cell_write(c->map[k], nxbe_swap_slot(c->swap[k]));
+              cell_abs(c->map[k],&r);
+              if(nxbe_swap_restore(c->swap[k],&r)<0)
+                {
+                  g_nxaccel->cells_free(1,&c->map[k]);
+                  c->map[k]=NX_CELL_NONE; c->nres--;
+                  for(int pending=k+1;pending<n;pending++)
+                    {
+                      if(c->map[pending]==NX_CELL_SKIP) c->map[pending]=NX_CELL_NONE;
+                      else if(c->flags[pending]&NXBE_CELL_NEW)
+                        { g_nxaccel->cells_free(1,&c->map[pending]); c->map[pending]=NX_CELL_NONE; }
+                      c->flags[pending]&=~NXBE_CELL_NEW;
+                    }
+                  cells_moved(wnd);
+                  nxbe_compose_changed();
+                  return false;
+                }
             }
 
           g_nxbe_swap.ins++;

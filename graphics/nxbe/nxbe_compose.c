@@ -1941,8 +1941,10 @@ static void comp_mipmake(FAR struct nxbe_window_s *wnd)
               else if ((c->flags[kk] & NXBE_CELL_SWAP) != 0 && sh <= 5)
                 {
                   static uint16_t px[32 * 32];          /* (the server's) */
-                  FAR const uint16_t *slot =
-                    (FAR const uint16_t *)(nxbe_swap_slot(c->swap[kk]) + 1);
+                  FAR uint32_t *saved=nxbe_swap_slot(c->swap[kk]);
+                  FAR const uint16_t *slot;
+                  if(!saved) { mip->dirty=true; continue; }
+                  slot=(FAR const uint16_t *)(saved+1);
                   int n = xb - xa + 1;
                   int u;
                   int v;
@@ -2975,6 +2977,7 @@ static void comp_need(FAR struct nxbe_window_s *wnd)
   for (k = 0; k < n; k++)
     {
       c->flags[k] &= ~NXBE_CELL_NEED;
+      if(c->flags[k]&NXBE_CELL_DRAW) c->flags[k]|=NXBE_CELL_NEED;
     }
 
   /* A game has the display: nothing of any window is seen (all of them
@@ -2988,14 +2991,9 @@ static void comp_need(FAR struct nxbe_window_s *wnd)
 
   if (NXBE_ISHIDDEN(wnd))
     {
-      if ((wnd->fx.flags & NX_FX_PARK) == 0)
-        {
-          for (k = 0; k < n; k++)
-            {
-              c->flags[k] |= NXBE_CELL_NEED;
-            }
-        }
-
+      /* Invisible pixels can move to backing without being discarded.
+       * cell_out retains the cell if neither backing nor redraw is safe.
+       */
       return;
     }
 

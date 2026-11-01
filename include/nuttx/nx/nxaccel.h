@@ -194,6 +194,20 @@ struct nx_accel_s
   CODE void (*cells_free)(int n, FAR const uint16_t *cells);
   uint8_t cellshift;
 
+  /* Optional device-local backing for evicted window cells. Handles are
+   * nonnegative and private to the driver. Save/restore complete before
+   * returning; failures leave the source intact. read returns packed
+   * RGB565 pixels for CPU readback/thumbnails. All callbacks or none.
+   */
+
+  CODE int (*backing_alloc)(void);
+  CODE void (*backing_free)(int handle);
+  CODE int (*backing_save)(int handle, FAR const struct nxgl_rect_s *src);
+  CODE int (*backing_restore)(int handle, FAR const struct nxgl_rect_s *dst);
+  CODE int (*backing_read)(int handle, FAR uint16_t *pixels);
+  CODE void (*backing_usage)(FAR uint32_t *slots, FAR uint32_t *bytes);
+
+
   /* The space surfaces and the display share (0: not said): a second
    * display buffer is only tried where one of the mode's size can fit
    * beside or below the display at (0, 0)

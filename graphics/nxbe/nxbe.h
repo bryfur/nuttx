@@ -400,6 +400,7 @@ struct nxbe_cells_s
 #define NXBE_CELL_SWAP  0x01          /* The swap holds its pixels (a slot,
                                        * or one colour) */
 #define NXBE_CELL_LOST  0x02          /* Not resident, its pixels gone */
+#define NXBE_CELL_DRAW  0x10          /* Temporarily pinned for a write */
 #define NXBE_CELL_NEED  0x04          /* Seen: must be resident */
 
 #define NX_CELL_SKIP    0xfffe        /* (cells_alloc(): not to be placed,
@@ -447,7 +448,7 @@ void nxbe_surface_copyto(FAR struct nxbe_window_s *wnd,
                          FAR const struct nxgl_point_s *dest);
 bool nxbe_surface_take(nxgl_coord_t w, nxgl_coord_t h, int kind,
                        FAR struct nxgl_point_s *pos);
-void nxbe_surface_drawing(FAR struct nxbe_window_s *wnd,
+bool nxbe_surface_drawing(FAR struct nxbe_window_s *wnd,
                           FAR const struct nxgl_rect_s *rel);
 void nxbe_surface_drawn(FAR struct nxbe_window_s *wnd,
                         FAR const struct nxgl_rect_s *rel);
@@ -555,7 +556,7 @@ void nxbe_srccache_trim(void);
 
 struct nxbe_swapstats_s
 {
-  uint32_t outs;                      /* Cells read back into it */
+  uint32_t outs;                      /* Cells saved into backing */
   uint32_t ins;                       /* ... put back from it */
   uint32_t lost;                      /* Cells lost (none to read into) */
   uint32_t redrawn;                   /* ... drawn again by their clients */
@@ -564,7 +565,7 @@ struct nxbe_swapstats_s
                                        * (kept as that colour) */
   uint32_t cleaned;                   /* Copies made of cells kept */
   uint32_t refused;                   /* The heap said no */
-  uint64_t outus;                     /* Time reading back */
+  uint64_t outus;                     /* Time saving to backing */
   uint64_t inus;                      /* ... putting back */
 };
 
@@ -572,6 +573,8 @@ EXTERN struct nxbe_swapstats_s g_nxbe_swap;
 
 void nxbe_swap_init(int cellshift);
 int  nxbe_swap_alloc(void);
+int nxbe_swap_save(FAR const struct nxgl_rect_s *src);
+int nxbe_swap_restore(int slot,FAR const struct nxgl_rect_s *dst);
 void nxbe_swap_free(int slot);
 FAR uint32_t *nxbe_swap_slot(int slot);
 void nxbe_swap_usage(FAR uint32_t *slots, FAR uint32_t *bytes);

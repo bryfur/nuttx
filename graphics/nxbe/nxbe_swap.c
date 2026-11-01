@@ -20,7 +20,8 @@
  *
  ****************************************************************************/
 
-/* The swap (CONFIG_NX_COMPOSITOR_SWAP): memory for the cells of windows
+/* Device-local backing is tried first, with completed GPU save/restore.
+ * The CPU swap (CONFIG_NX_COMPOSITOR_SWAP): memory for the cells of windows
  * that are not seen (nxbe_accel.c reads them back into it, and puts them
  * back when they are seen again).  A slot holds one cell as the hardware's
  * readbulk() leaves it: a word, the cell's pixels (rows packed), a word.
@@ -36,6 +37,7 @@
 
 #include <nuttx/config.h>
 
+#include <errno.h>
 #include <malloc.h>
 #include <stdint.h>
 #include <string.h>
@@ -50,6 +52,8 @@
 /****************************************************************************
  * Pre-processor Definitions
  ****************************************************************************/
+
+#define NXSWAP_DEVICE    (1 << 20)       /* Device handle namespace */
 
 #define NXSWAP_CHUNK     32                /* Slots a chunk */
 #define NXSWAP_MAXCHUNKS 128               /* (16 bits of slot numbers) */
@@ -137,7 +141,8 @@ void nxbe_swap_init(int cellshift)
  *
  * Description:
  *   A slot (its number), or -1 if there is no room within the budget;
- *   give one back; where a slot is.
+ *   give one back; where a slot is. Device slots read into a shared server
+ *   buffer, valid until the next slot read; NULL means readback failed.
  *
  ****************************************************************************/
 
@@ -200,8 +205,27 @@ int nxbe_swap_alloc(void)
   return c * NXSWAP_CHUNK;
 }
 
+/* A device-backed copy of a resident cell, or -1 to use CPU backing.
+ * CPU swap disabling during an exclusive game need not disable HyperRAM.
+ */
+int nxbe_swap_save(FAR const struct nxgl_rect_s *r)
+{
+  int handle;
+  if(!g_nxaccel || !g_nxaccel->backing_alloc || !g_nxaccel->backing_free ||
+     !g_nxaccel->backing_save || !g_nxaccel->backing_restore ||
+     !g_nxaccel->backing_read) return -1;
+  handle=g_nxaccel->backing_alloc();
+  if(handle<0) return -1;
+  if(handle>=NXSWAP_DEVICE || g_nxaccel->backing_save(handle,r)<0)
+    { g_nxaccel->backing_free(handle); return -1; }
+  return NXSWAP_DEVICE+handle;
+}
+
 void nxbe_swap_free(int slot)
 {
+  if(slot>=NXSWAP_DEVICE)
+    { g_nxaccel->backing_free(slot-NXSWAP_DEVICE); return; }
+  if(slot<0) return;
   int c = slot / NXSWAP_CHUNK;
   uint32_t bit = 1u << (slot % NXSWAP_CHUNK);
 
@@ -223,10 +247,26 @@ void nxbe_swap_free(int slot)
     }
 }
 
+static uint32_t g_swapbuf[32*32/2+2];
 FAR uint32_t *nxbe_swap_slot(int slot)
 {
+  if(slot>=NXSWAP_DEVICE)
+    {
+      if(g_nxaccel->backing_read(slot-NXSWAP_DEVICE,(uint16_t *)(g_swapbuf+1))<0)
+        return NULL;
+      return g_swapbuf;
+    }
   return g_swap.chunk[slot / NXSWAP_CHUNK] +
          (size_t)(slot % NXSWAP_CHUNK) * g_swap.slotwords;
+}
+
+int nxbe_swap_restore(int slot,FAR const struct nxgl_rect_s *r)
+{
+  if(slot>=NXSWAP_DEVICE)
+    return g_nxaccel->backing_restore(slot-NXSWAP_DEVICE,r);
+  memcpy(g_swapbuf+1,nxbe_swap_slot(slot)+1,(g_swap.slotwords-2)*4);
+  g_nxaccel->copy(r,g_swapbuf+1,&r->pt1,(r->pt2.x-r->pt1.x+1)*2);
+  return 0;
 }
 
 /****************************************************************************
@@ -247,7 +287,7 @@ void nxbe_swap_enable(bool on)
  * Name: nxbe_swap_usage
  *
  * Description:
- *   Slots in use, and the bytes the swap takes from the heap.
+ *   Slots in use, and backing bytes reserved in CPU and device memory.
  *
  ****************************************************************************/
 
@@ -263,6 +303,12 @@ void nxbe_swap_usage(FAR uint32_t *slots, FAR uint32_t *bytes)
 
   *slots = g_swap.nused;
   *bytes = (uint32_t)n * NXSWAP_CHUNK * g_swap.slotwords * sizeof(uint32_t);
+  if(g_nxaccel && g_nxaccel->backing_usage)
+    {
+      uint32_t device_slots,device_bytes;
+      g_nxaccel->backing_usage(&device_slots,&device_bytes);
+      *slots+=device_slots; *bytes+=device_bytes;
+    }
 }
 
 #endif /* CONFIG_NX_COMPOSITOR */
